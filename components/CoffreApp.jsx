@@ -1,0 +1,1110 @@
+"use client";
+
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import {
+  Plus,
+  Trash2,
+  Search,
+  X,
+  LogOut,
+  Users,
+  FolderOpen,
+  Settings as SettingsIcon,
+  Check,
+  Download,
+  FileText,
+  Phone,
+  Mail,
+  MapPin,
+  Cake,
+  Building2,
+  AlertTriangle,
+  UploadCloud,
+} from "lucide-react";
+import { supabase, DOCUMENTS_BUCKET } from "../lib/supabaseClient";
+import { parseVCardFile } from "../lib/vcard";
+
+const GENERAL_LABEL = "Général";
+
+// Palette fixe : les classes sont écrites en toutes lettres ci-dessous pour
+// que Tailwind les détecte à la compilation (jamais de bg-${x}-500 dynamique,
+// qui ne génère aucune classe et rend des badges invisibles).
+const PALETTE = ["blue", "emerald", "rose", "amber", "violet", "teal", "fuchsia", "cyan", "indigo", "stone"];
+const SWATCH_BG = {
+  blue: "bg-blue-500",
+  emerald: "bg-emerald-500",
+  rose: "bg-rose-500",
+  amber: "bg-amber-500",
+  violet: "bg-violet-500",
+  teal: "bg-teal-500",
+  fuchsia: "bg-fuchsia-500",
+  cyan: "bg-cyan-500",
+  indigo: "bg-indigo-500",
+  stone: "bg-stone-500",
+};
+const BADGE_CLASSES = {
+  blue: "bg-blue-50 text-blue-800 border-blue-200",
+  emerald: "bg-emerald-50 text-emerald-800 border-emerald-200",
+  rose: "bg-rose-50 text-rose-800 border-rose-200",
+  amber: "bg-amber-50 text-amber-800 border-amber-200",
+  violet: "bg-violet-50 text-violet-800 border-violet-200",
+  teal: "bg-teal-50 text-teal-800 border-teal-200",
+  fuchsia: "bg-fuchsia-50 text-fuchsia-800 border-fuchsia-200",
+  cyan: "bg-cyan-50 text-cyan-800 border-cyan-200",
+  indigo: "bg-indigo-50 text-indigo-800 border-indigo-200",
+  stone: "bg-stone-50 text-stone-700 border-stone-200",
+};
+
+function normalizeStr(s) {
+  return (s || "")
+    .toString()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+function contactDisplayName(c) {
+  if (c.societe && c.societe.trim()) return c.societe.trim();
+  return [c.nom, c.prenom].filter(Boolean).join(" ").trim() || "(Sans nom)";
+}
+function contactSortKey(c) {
+  return normalizeStr(c.societe ? c.societe : `${c.nom || ""} ${c.prenom || ""}`);
+}
+function formatDateFR(d) {
+  if (!d) return "";
+  const dt = new Date(d + "T00:00:00");
+  if (isNaN(dt.getTime())) return d;
+  return new Intl.DateTimeFormat("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric" }).format(dt);
+}
+function daysUntil(d) {
+  if (!d) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const target = new Date(d + "T00:00:00");
+  return Math.round((target.getTime() - today.getTime()) / 86400000);
+}
+function fileExtIcon() {
+  return <FileText size={15} />;
+}
+
+const NAV_ITEMS = [
+  { key: "contacts", label: "Contacts", icon: Users },
+  { key: "documents", label: "Documents", icon: FolderOpen },
+];
+
+export default function CoffreApp({ session }) {
+  const [activeTab, setActiveTab] = useState("contacts");
+  const [familyMembers, setFamilyMembers] = useState([]);
+  const [contactTypes, setContactTypes] = useState([]);
+  const [documentTypes, setDocumentTypes] = useState([]);
+  const [contacts, setContacts] = useState([]);
+  const [documents, setDocuments] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState("");
+
+  const fetchAll = useCallback(async () => {
+    try {
+      const [{ data: fm }, { data: ct }, { data: dt }, { data: cs }, { data: docs }] = await Promise.all([
+        supabase.from("family_members").select("*").order("name", { ascending: true }),
+        supabase.from("contact_types").select("*").order("name", { ascending: true }),
+        supabase.from("document_types").select("*").order("name", { ascending: true }),
+        supabase.from("contacts").select("*"),
+        supabase.from("documents").select("*"),
+      ]);
+      setFamilyMembers(fm || []);
+      setContactTypes(ct || []);
+      setDocumentTypes(dt || []);
+      setContacts(cs || []);
+      setDocuments(docs || []);
+      setErrorMsg("");
+    } catch (e) {
+      setErrorMsg("Impossible de charger les données. Vérifiez votre connexion.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchAll();
+    const channel = supabase
+      .channel("coffre-changes")
+      .on("postgres_changes", { event: "*", schema: "coffre", table: "contacts" }, fetchAll)
+      .on("postgres_changes", { event: "*", schema: "coffre", table: "documents" }, fetchAll)
+      .on("postgres_changes", { event: "*", schema: "coffre", table: "family_members" }, fetchAll)
+      .on("postgres_changes", { event: "*", schema: "coffre", table: "contact_types" }, fetchAll)
+      .on("postgres_changes", { event: "*", schema: "coffre", table: "document_types" }, fetchAll)
+      .subscribe();
+    return () => supabase.removeChannel(channel);
+  }, [fetchAll]);
+
+  const familyMemberById = useMemo(() => {
+    const map = {};
+    familyMembers.forEach((m) => (map[m.id] = m));
+    return map;
+  }, [familyMembers]);
+  const contactTypeById = useMemo(() => {
+    const map = {};
+    contactTypes.forEach((t) => (map[t.id] = t));
+    return map;
+  }, [contactTypes]);
+  const documentTypeById = useMemo(() => {
+    const map = {};
+    documentTypes.forEach((t) => (map[t.id] = t));
+    return map;
+  }, [documentTypes]);
+
+  if (loading) {
+    return <div className="w-full min-h-screen flex items-center justify-center text-stone-400 text-sm font-sans">Chargement du coffre numérique…</div>;
+  }
+
+  // --- Contacts ---
+  async function saveContact(fields, existingId) {
+    const payload = {
+      contact_type_id: fields.contactTypeId,
+      family_member_id: fields.familyMemberId || null,
+      nom: fields.nom,
+      prenom: fields.prenom,
+      societe: fields.societe,
+      telephone_mobile: fields.telephoneMobile,
+      telephone_fixe: fields.telephoneFixe,
+      email: fields.email,
+      adresse: fields.adresse,
+      code_postal: fields.codePostal,
+      ville: fields.ville,
+      date_naissance: fields.dateNaissance || null,
+      notes: fields.notes,
+    };
+    const { error } = existingId
+      ? await supabase.from("contacts").update(payload).eq("id", existingId)
+      : await supabase.from("contacts").insert(payload);
+    if (error) { setErrorMsg("Impossible d'enregistrer ce contact."); return false; }
+    fetchAll();
+    return true;
+  }
+  async function deleteContact(id) {
+    const { error } = await supabase.from("contacts").delete().eq("id", id);
+    if (error) setErrorMsg("Impossible de supprimer ce contact.");
+    else fetchAll();
+  }
+  async function importContacts(rows) {
+    const payload = rows.map((r) => ({
+      contact_type_id: r.contactTypeId,
+      family_member_id: r.familyMemberId || null,
+      nom: r.lastName,
+      prenom: r.firstName,
+      societe: r.org,
+      telephone_mobile: r.mobile,
+      telephone_fixe: r.phone2,
+      email: r.email,
+      adresse: r.address?.street || "",
+      code_postal: r.address?.postalCode || "",
+      ville: r.address?.city || "",
+      date_naissance: r.birthday || null,
+      notes: "",
+    }));
+    const { error } = await supabase.from("contacts").insert(payload);
+    if (error) { setErrorMsg("Impossible d'importer certains contacts."); return false; }
+    fetchAll();
+    return true;
+  }
+
+  // --- Documents ---
+  async function saveDocument(fields, existingId, previousFile) {
+    let filePath = previousFile?.file_path || null;
+    let fileName = previousFile?.file_name || null;
+    if (fields.file) {
+      if (previousFile?.file_path) {
+        await supabase.storage.from(DOCUMENTS_BUCKET).remove([previousFile.file_path]);
+      }
+      const folder = fields.familyMemberId || "general";
+      const safeName = fields.file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const path = `${folder}/${Date.now()}-${safeName}`;
+      const { error: uploadError } = await supabase.storage.from(DOCUMENTS_BUCKET).upload(path, fields.file, { upsert: true });
+      if (uploadError) { setErrorMsg("Impossible d'envoyer le fichier."); return false; }
+      filePath = path;
+      fileName = fields.file.name;
+    }
+    const payload = {
+      document_type_id: fields.documentTypeId,
+      family_member_id: fields.familyMemberId || null,
+      libelle: fields.libelle,
+      date_document: fields.dateDocument || null,
+      date_fin_validite: fields.dateFinValidite || null,
+      file_path: filePath,
+      file_name: fileName,
+    };
+    const { error } = existingId
+      ? await supabase.from("documents").update(payload).eq("id", existingId)
+      : await supabase.from("documents").insert(payload);
+    if (error) { setErrorMsg("Impossible d'enregistrer ce document."); return false; }
+    fetchAll();
+    return true;
+  }
+  async function deleteDocument(doc) {
+    if (doc.file_path) await supabase.storage.from(DOCUMENTS_BUCKET).remove([doc.file_path]);
+    const { error } = await supabase.from("documents").delete().eq("id", doc.id);
+    if (error) setErrorMsg("Impossible de supprimer ce document.");
+    else fetchAll();
+  }
+  async function downloadDocument(doc) {
+    if (!doc.file_path) return;
+    const { data, error } = await supabase.storage.from(DOCUMENTS_BUCKET).createSignedUrl(doc.file_path, 120);
+    if (error || !data?.signedUrl) { setErrorMsg("Impossible de générer le lien de téléchargement."); return; }
+    window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+  }
+
+  // --- Paramétrage : listes de référence ---
+  async function addRef(table, name) {
+    const { error } = await supabase.from(table).insert({ name });
+    if (error) setErrorMsg("Impossible d'ajouter cet élément.");
+    else fetchAll();
+  }
+  async function addContactType(name, color) {
+    const { error } = await supabase.from("contact_types").insert({ name, color: color || "stone" });
+    if (error) setErrorMsg("Impossible d'ajouter ce type.");
+    else fetchAll();
+  }
+  async function updateRef(table, id, name) {
+    const { error } = await supabase.from(table).update({ name }).eq("id", id);
+    if (error) setErrorMsg("Impossible de modifier cet élément.");
+    else fetchAll();
+  }
+  async function removeRef(table, id) {
+    const { error } = await supabase.from(table).delete().eq("id", id);
+    if (error) return false;
+    fetchAll();
+    return true;
+  }
+  async function updateContactTypeColor(id, color) {
+    const { error } = await supabase.from("contact_types").update({ color }).eq("id", id);
+    if (error) setErrorMsg("Impossible de modifier la couleur.");
+    else fetchAll();
+  }
+
+  async function logout() {
+    await supabase.auth.signOut();
+  }
+
+  return (
+    <div className="w-full min-h-screen bg-stone-50 font-sans text-stone-900 flex">
+      <aside className="w-56 shrink-0 bg-stone-100 border-r border-stone-200 min-h-screen p-4 hidden sm:flex flex-col">
+        <div className="mb-6 px-1">
+          <p className="font-serif text-lg text-blue-950">Coffre numérique</p>
+          <p className="text-xs text-stone-500 truncate">{session.user.email}</p>
+        </div>
+        <nav className="space-y-1 flex-1">
+          {NAV_ITEMS.map((item) => {
+            const Icon = item.icon;
+            const active = activeTab === item.key;
+            return (
+              <button
+                key={item.key}
+                onClick={() => setActiveTab(item.key)}
+                className={`w-full flex items-center gap-2 text-left text-sm px-3 py-2 rounded-md ${
+                  active ? "bg-blue-950 text-white" : "text-stone-600 hover:bg-stone-200"
+                }`}
+              >
+                <Icon size={16} />
+                {item.label}
+              </button>
+            );
+          })}
+          <div className="pt-2 mt-2 border-t border-stone-200">
+            <button
+              onClick={() => setActiveTab("settings")}
+              className={`w-full flex items-center gap-2 text-left text-sm px-3 py-2 rounded-md ${
+                activeTab === "settings" ? "bg-stone-700 text-white" : "text-stone-500 hover:bg-stone-200"
+              }`}
+            >
+              <SettingsIcon size={16} /> Paramétrage
+            </button>
+          </div>
+        </nav>
+        <button onClick={logout} className="flex items-center gap-2 text-sm text-stone-500 px-3 py-2 rounded-md hover:bg-stone-200">
+          <LogOut size={16} /> Déconnexion
+        </button>
+      </aside>
+
+      <div className="sm:hidden fixed bottom-0 inset-x-0 bg-stone-100 border-t border-stone-200 flex z-10">
+        {[...NAV_ITEMS, { key: "settings", label: "Paramétrage", icon: SettingsIcon }].map((item) => {
+          const Icon = item.icon;
+          const active = activeTab === item.key;
+          return (
+            <button
+              key={item.key}
+              onClick={() => setActiveTab(item.key)}
+              className={`flex-1 flex flex-col items-center gap-1 py-2 text-[11px] ${active ? (item.key === "settings" ? "text-stone-700" : "text-blue-950") : "text-stone-500"}`}
+            >
+              <Icon size={18} />
+              {item.label.split(" ")[0]}
+            </button>
+          );
+        })}
+      </div>
+
+      <main className="flex-1 min-w-0 pb-16 sm:pb-0">
+        {errorMsg && (
+          <div className="m-5 sm:m-8 sm:mb-0 text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-md px-3 py-2 flex items-start justify-between gap-3">
+            <span>{errorMsg}</span>
+            <button onClick={() => setErrorMsg("")} className="text-rose-400 hover:text-rose-600 shrink-0"><X size={14} /></button>
+          </div>
+        )}
+
+        {activeTab === "contacts" && (
+          <ContactsTab
+            contacts={contacts}
+            contactTypes={contactTypes}
+            familyMembers={familyMembers}
+            contactTypeById={contactTypeById}
+            familyMemberById={familyMemberById}
+            onSave={saveContact}
+            onDelete={deleteContact}
+          />
+        )}
+
+        {activeTab === "documents" && (
+          <DocumentsTab
+            documents={documents}
+            documentTypes={documentTypes}
+            familyMembers={familyMembers}
+            documentTypeById={documentTypeById}
+            familyMemberById={familyMemberById}
+            onSave={saveDocument}
+            onDelete={deleteDocument}
+            onDownload={downloadDocument}
+          />
+        )}
+
+        {activeTab === "settings" && (
+          <CoffreSettingsTab
+            familyMembers={familyMembers}
+            contactTypes={contactTypes}
+            documentTypes={documentTypes}
+            contacts={contacts}
+            documents={documents}
+            onAddRef={addRef}
+            onAddContactType={addContactType}
+            onUpdateRef={updateRef}
+            onRemoveRef={removeRef}
+            onUpdateContactTypeColor={updateContactTypeColor}
+            onImportContacts={importContacts}
+          />
+        )}
+      </main>
+    </div>
+  );
+}
+
+function TypeBadge({ type }) {
+  if (!type) return null;
+  const cls = BADGE_CLASSES[type.color] || BADGE_CLASSES.stone;
+  return <span className={`inline-block text-xs px-2 py-0.5 rounded-full border ${cls}`}>{type.name}</span>;
+}
+
+function MemberBadge({ member }) {
+  return (
+    <span className="inline-block text-xs px-2 py-0.5 rounded-full border bg-stone-100 text-stone-600 border-stone-200">
+      {member ? member.name : GENERAL_LABEL}
+    </span>
+  );
+}
+
+/* ---------------------------- Contacts ---------------------------- */
+
+function ContactsTab({ contacts, contactTypes, familyMembers, contactTypeById, familyMemberById, onSave, onDelete }) {
+  const [search, setSearch] = useState("");
+  const [filterType, setFilterType] = useState("");
+  const [filterMember, setFilterMember] = useState("");
+  const [editing, setEditing] = useState(null); // null = closed, {} = new, {...} = edit
+  const [openId, setOpenId] = useState(null);
+
+  const filtered = useMemo(() => {
+    const q = normalizeStr(search);
+    return contacts
+      .filter((c) => {
+        if (filterType && c.contact_type_id !== filterType) return false;
+        if (filterMember === "__general__" && c.family_member_id) return false;
+        if (filterMember && filterMember !== "__general__" && c.family_member_id !== filterMember) return false;
+        if (!q) return true;
+        const haystack = normalizeStr(
+          [c.nom, c.prenom, c.societe, c.email, c.telephone_mobile, c.telephone_fixe, c.ville].filter(Boolean).join(" ")
+        );
+        return haystack.includes(q);
+      })
+      .sort((a, b) => contactSortKey(a).localeCompare(contactSortKey(b), "fr"));
+  }, [contacts, search, filterType, filterMember]);
+
+  return (
+    <div className="max-w-4xl mx-auto p-5 sm:p-8 space-y-5">
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="font-serif text-2xl text-blue-950 tracking-tight">Contacts</h1>
+          <p className="text-stone-500 text-sm mt-1">Perso, travail, artisans... {contacts.length} contact{contacts.length > 1 ? "s" : ""}, triés par ordre alphabétique.</p>
+        </div>
+        <button
+          onClick={() => setEditing({})}
+          className="flex items-center gap-1.5 px-3 py-2 text-sm rounded-md bg-blue-950 text-white hover:bg-blue-900"
+        >
+          <Plus size={15} /> Ajouter un contact
+        </button>
+      </div>
+
+      <div className="bg-white rounded-lg border border-stone-200 p-3 flex flex-wrap gap-2 items-center">
+        <div className="relative flex-1 min-w-[200px]">
+          <Search size={15} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-stone-400" />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Rechercher un nom, une société, un téléphone, un email…"
+            className="w-full pl-8 pr-3 py-1.5 rounded-md border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-800"
+          />
+        </div>
+        <select value={filterType} onChange={(e) => setFilterType(e.target.value)} className="px-2.5 py-1.5 rounded-md border border-stone-300 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-800">
+          <option value="">Tous les types</option>
+          {contactTypes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+        </select>
+        <select value={filterMember} onChange={(e) => setFilterMember(e.target.value)} className="px-2.5 py-1.5 rounded-md border border-stone-300 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-800">
+          <option value="">Tous les membres</option>
+          <option value="__general__">{GENERAL_LABEL}</option>
+          {familyMembers.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+        </select>
+      </div>
+
+      <div className="bg-white rounded-lg border border-stone-200 divide-y divide-stone-100 overflow-hidden">
+        {filtered.length === 0 && (
+          <p className="text-sm text-stone-400 py-8 text-center">Aucun contact ne correspond à votre recherche.</p>
+        )}
+        {filtered.map((c) => {
+          const isOpen = openId === c.id;
+          return (
+            <div key={c.id}>
+              <button
+                onClick={() => setOpenId(isOpen ? null : c.id)}
+                className="w-full text-left px-4 py-3 flex items-center gap-3 hover:bg-stone-50"
+              >
+                <div className="w-9 h-9 rounded-full bg-blue-50 text-blue-900 flex items-center justify-center text-sm font-medium shrink-0">
+                  {contactDisplayName(c).slice(0, 1).toUpperCase()}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-stone-800 truncate">{contactDisplayName(c)}</p>
+                  <p className="text-xs text-stone-400 truncate">
+                    {[c.telephone_mobile || c.telephone_fixe, c.email].filter(Boolean).join(" · ") || "—"}
+                  </p>
+                </div>
+                <div className="hidden sm:flex items-center gap-1.5 shrink-0">
+                  <TypeBadge type={contactTypeById[c.contact_type_id]} />
+                  <MemberBadge member={familyMemberById[c.family_member_id]} />
+                </div>
+              </button>
+              {isOpen && (
+                <div className="px-4 pb-4 pt-1 bg-stone-50 border-t border-stone-100 space-y-2">
+                  <div className="flex sm:hidden gap-1.5 flex-wrap">
+                    <TypeBadge type={contactTypeById[c.contact_type_id]} />
+                    <MemberBadge member={familyMemberById[c.family_member_id]} />
+                  </div>
+                  <div className="grid sm:grid-cols-2 gap-x-6 gap-y-1.5 text-sm text-stone-600">
+                    {c.telephone_mobile && <p className="flex items-center gap-1.5"><Phone size={13} className="text-stone-400" /> {c.telephone_mobile} <span className="text-stone-400">(mobile)</span></p>}
+                    {c.telephone_fixe && <p className="flex items-center gap-1.5"><Phone size={13} className="text-stone-400" /> {c.telephone_fixe} <span className="text-stone-400">(fixe)</span></p>}
+                    {c.email && <p className="flex items-center gap-1.5"><Mail size={13} className="text-stone-400" /> {c.email}</p>}
+                    {(c.adresse || c.ville) && <p className="flex items-center gap-1.5"><MapPin size={13} className="text-stone-400" /> {[c.adresse, c.code_postal, c.ville].filter(Boolean).join(" ")}</p>}
+                    {c.date_naissance && <p className="flex items-center gap-1.5"><Cake size={13} className="text-stone-400" /> Né(e) le {formatDateFR(c.date_naissance)}</p>}
+                    {c.societe && (c.nom || c.prenom) && <p className="flex items-center gap-1.5"><Building2 size={13} className="text-stone-400" /> Contact : {[c.prenom, c.nom].filter(Boolean).join(" ")}</p>}
+                  </div>
+                  {c.notes && <p className="text-xs text-stone-500 italic pt-1">{c.notes}</p>}
+                  <div className="pt-2">
+                    <button onClick={() => setEditing(c)} className="text-xs px-2.5 py-1.5 rounded-md border border-stone-300 hover:bg-white">Modifier</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {editing !== null && (
+        <ContactEditor
+          contact={editing}
+          contactTypes={contactTypes}
+          familyMembers={familyMembers}
+          onCancel={() => setEditing(null)}
+          onSave={async (fields) => {
+            const ok = await onSave(fields, editing.id);
+            if (ok) setEditing(null);
+          }}
+          onDelete={editing.id ? async () => { await onDelete(editing.id); setEditing(null); setOpenId(null); } : null}
+        />
+      )}
+    </div>
+  );
+}
+
+function ContactEditor({ contact, contactTypes, familyMembers, onSave, onCancel, onDelete }) {
+  const [contactTypeId, setContactTypeId] = useState(contact.contact_type_id || contactTypes[0]?.id || "");
+  const [familyMemberId, setFamilyMemberId] = useState(contact.family_member_id || "");
+  const [nom, setNom] = useState(contact.nom || "");
+  const [prenom, setPrenom] = useState(contact.prenom || "");
+  const [societe, setSociete] = useState(contact.societe || "");
+  const [telephoneMobile, setTelephoneMobile] = useState(contact.telephone_mobile || "");
+  const [telephoneFixe, setTelephoneFixe] = useState(contact.telephone_fixe || "");
+  const [email, setEmail] = useState(contact.email || "");
+  const [adresse, setAdresse] = useState(contact.adresse || "");
+  const [codePostal, setCodePostal] = useState(contact.code_postal || "");
+  const [ville, setVille] = useState(contact.ville || "");
+  const [dateNaissance, setDateNaissance] = useState(contact.date_naissance || "");
+  const [notes, setNotes] = useState(contact.notes || "");
+  const [error, setError] = useState("");
+
+  return (
+    <div className="fixed inset-0 bg-stone-900/40 flex items-end sm:items-center justify-center z-20 p-0 sm:p-4">
+      <div className="bg-white rounded-t-xl sm:rounded-xl w-full sm:max-w-lg max-h-[92vh] overflow-y-auto p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="font-serif text-lg text-stone-800">{contact.id ? "Modifier le contact" : "Nouveau contact"}</h3>
+          <button onClick={onCancel} className="text-stone-400 hover:text-stone-600"><X size={18} /></button>
+        </div>
+
+        <div className="grid sm:grid-cols-2 gap-3">
+          <div>
+            <label className="text-xs text-stone-500 block mb-1">Type de contact</label>
+            <select value={contactTypeId} onChange={(e) => setContactTypeId(e.target.value)} className="w-full px-2.5 py-1.5 rounded-md border border-stone-300 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-800">
+              {contactTypes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs text-stone-500 block mb-1">Concerne</label>
+            <select value={familyMemberId} onChange={(e) => setFamilyMemberId(e.target.value)} className="w-full px-2.5 py-1.5 rounded-md border border-stone-300 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-800">
+              <option value="">{GENERAL_LABEL}</option>
+              {familyMembers.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs text-stone-500 block mb-1">Nom</label>
+            <input value={nom} onChange={(e) => setNom(e.target.value)} className="w-full px-2.5 py-1.5 rounded-md border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-800" />
+          </div>
+          <div>
+            <label className="text-xs text-stone-500 block mb-1">Prénom</label>
+            <input value={prenom} onChange={(e) => setPrenom(e.target.value)} className="w-full px-2.5 py-1.5 rounded-md border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-800" />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="text-xs text-stone-500 block mb-1">Société / Raison sociale <span className="text-stone-400">(artisan, entreprise…)</span></label>
+            <input value={societe} onChange={(e) => setSociete(e.target.value)} className="w-full px-2.5 py-1.5 rounded-md border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-800" />
+          </div>
+          <div>
+            <label className="text-xs text-stone-500 block mb-1">Téléphone mobile</label>
+            <input value={telephoneMobile} onChange={(e) => setTelephoneMobile(e.target.value)} className="w-full px-2.5 py-1.5 rounded-md border border-stone-300 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-800" />
+          </div>
+          <div>
+            <label className="text-xs text-stone-500 block mb-1">Téléphone fixe</label>
+            <input value={telephoneFixe} onChange={(e) => setTelephoneFixe(e.target.value)} className="w-full px-2.5 py-1.5 rounded-md border border-stone-300 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-800" />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="text-xs text-stone-500 block mb-1">Email</label>
+            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full px-2.5 py-1.5 rounded-md border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-800" />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="text-xs text-stone-500 block mb-1">Adresse</label>
+            <input value={adresse} onChange={(e) => setAdresse(e.target.value)} className="w-full px-2.5 py-1.5 rounded-md border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-800" />
+          </div>
+          <div>
+            <label className="text-xs text-stone-500 block mb-1">Code postal</label>
+            <input value={codePostal} onChange={(e) => setCodePostal(e.target.value)} className="w-full px-2.5 py-1.5 rounded-md border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-800" />
+          </div>
+          <div>
+            <label className="text-xs text-stone-500 block mb-1">Ville</label>
+            <input value={ville} onChange={(e) => setVille(e.target.value)} className="w-full px-2.5 py-1.5 rounded-md border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-800" />
+          </div>
+          <div>
+            <label className="text-xs text-stone-500 block mb-1">Date de naissance</label>
+            <input type="date" value={dateNaissance} onChange={(e) => setDateNaissance(e.target.value)} className="w-full px-2.5 py-1.5 rounded-md border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-800" />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="text-xs text-stone-500 block mb-1">Notes</label>
+            <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className="w-full px-2.5 py-1.5 rounded-md border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-800" />
+          </div>
+        </div>
+
+        {error && <p className="text-xs text-rose-600">{error}</p>}
+        <div className="flex items-center justify-between pt-1">
+          {onDelete ? (
+            <button onClick={onDelete} className="flex items-center gap-1 text-xs text-rose-600 hover:text-rose-700 px-2 py-1.5">
+              <Trash2 size={14} /> Supprimer
+            </button>
+          ) : <span />}
+          <div className="flex gap-2">
+            <button onClick={onCancel} className="px-3 py-1.5 text-sm rounded-md border border-stone-300 hover:bg-stone-100">Annuler</button>
+            <button
+              onClick={() => {
+                if (!nom.trim() && !societe.trim()) { setError("Entrez au moins un nom ou une société."); return; }
+                if (!contactTypeId) { setError("Choisissez un type de contact."); return; }
+                onSave({
+                  contactTypeId, familyMemberId, nom: nom.trim(), prenom: prenom.trim(), societe: societe.trim(),
+                  telephoneMobile: telephoneMobile.trim(), telephoneFixe: telephoneFixe.trim(), email: email.trim(),
+                  adresse: adresse.trim(), codePostal: codePostal.trim(), ville: ville.trim(), dateNaissance, notes: notes.trim(),
+                });
+              }}
+              className="px-3 py-1.5 text-sm rounded-md bg-blue-950 text-white hover:bg-blue-900"
+            >
+              Enregistrer
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------- Documents ---------------------------- */
+
+function DocumentsTab({ documents, documentTypes, familyMembers, documentTypeById, familyMemberById, onSave, onDelete, onDownload }) {
+  const [filterType, setFilterType] = useState("");
+  const [filterMember, setFilterMember] = useState("");
+  const [editing, setEditing] = useState(null);
+
+  const filtered = useMemo(() => {
+    return documents
+      .filter((d) => {
+        if (filterType && d.document_type_id !== filterType) return false;
+        if (filterMember === "__general__" && d.family_member_id) return false;
+        if (filterMember && filterMember !== "__general__" && d.family_member_id !== filterMember) return false;
+        return true;
+      })
+      .sort((a, b) => normalizeStr(a.libelle).localeCompare(normalizeStr(b.libelle), "fr"));
+  }, [documents, filterType, filterMember]);
+
+  return (
+    <div className="max-w-4xl mx-auto p-5 sm:p-8 space-y-5">
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="font-serif text-2xl text-blue-950 tracking-tight">Documents</h1>
+          <p className="text-stone-500 text-sm mt-1">Pièces d'identité, permis, justificatifs... {documents.length} document{documents.length > 1 ? "s" : ""}.</p>
+        </div>
+        <button
+          onClick={() => setEditing({})}
+          className="flex items-center gap-1.5 px-3 py-2 text-sm rounded-md bg-blue-950 text-white hover:bg-blue-900"
+        >
+          <Plus size={15} /> Ajouter un document
+        </button>
+      </div>
+
+      <div className="bg-white rounded-lg border border-stone-200 p-3 flex flex-wrap gap-2 items-center">
+        <select value={filterType} onChange={(e) => setFilterType(e.target.value)} className="px-2.5 py-1.5 rounded-md border border-stone-300 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-800">
+          <option value="">Tous les types</option>
+          {documentTypes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+        </select>
+        <select value={filterMember} onChange={(e) => setFilterMember(e.target.value)} className="px-2.5 py-1.5 rounded-md border border-stone-300 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-800">
+          <option value="">Tous les membres</option>
+          <option value="__general__">{GENERAL_LABEL}</option>
+          {familyMembers.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+        </select>
+      </div>
+
+      <div className="bg-white rounded-lg border border-stone-200 divide-y divide-stone-100 overflow-hidden">
+        {filtered.length === 0 && (
+          <p className="text-sm text-stone-400 py-8 text-center">Aucun document ne correspond à ce filtre.</p>
+        )}
+        {filtered.map((d) => {
+          const remaining = daysUntil(d.date_fin_validite);
+          const expiring = remaining !== null && remaining <= 30;
+          const expired = remaining !== null && remaining < 0;
+          return (
+            <div key={d.id} className="px-4 py-3 flex items-center gap-3 hover:bg-stone-50">
+              <div className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 ${expired ? "bg-rose-50 text-rose-600" : expiring ? "bg-amber-50 text-amber-600" : "bg-blue-50 text-blue-900"}`}>
+                {fileExtIcon()}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium text-stone-800 truncate">{d.libelle}</p>
+                <p className="text-xs text-stone-400 truncate">
+                  {documentTypeById[d.document_type_id]?.name || "—"}
+                  {d.date_fin_validite && (
+                    <>
+                      {" · "}
+                      <span className={expired ? "text-rose-600" : expiring ? "text-amber-600" : ""}>
+                        {expired ? "Expiré le" : "Valide jusqu'au"} {formatDateFR(d.date_fin_validite)}
+                      </span>
+                    </>
+                  )}
+                </p>
+              </div>
+              <div className="hidden sm:block shrink-0">
+                <MemberBadge member={familyMemberById[d.family_member_id]} />
+              </div>
+              {(expired || expiring) && (
+                <AlertTriangle size={15} className={expired ? "text-rose-500 shrink-0" : "text-amber-500 shrink-0"} />
+              )}
+              {d.file_path && (
+                <button onClick={() => onDownload(d)} title="Télécharger" className="p-1.5 text-stone-400 hover:text-blue-800 shrink-0">
+                  <Download size={16} />
+                </button>
+              )}
+              <button onClick={() => setEditing(d)} className="text-xs px-2.5 py-1.5 rounded-md border border-stone-300 hover:bg-white shrink-0">
+                Modifier
+              </button>
+            </div>
+          );
+        })}
+      </div>
+
+      {editing !== null && (
+        <DocumentEditor
+          doc={editing}
+          documentTypes={documentTypes}
+          familyMembers={familyMembers}
+          onCancel={() => setEditing(null)}
+          onSave={async (fields) => {
+            const ok = await onSave(fields, editing.id, editing.id ? editing : null);
+            if (ok) setEditing(null);
+          }}
+          onDelete={editing.id ? async () => { await onDelete(editing); setEditing(null); } : null}
+        />
+      )}
+    </div>
+  );
+}
+
+function DocumentEditor({ doc, documentTypes, familyMembers, onSave, onCancel, onDelete }) {
+  const [documentTypeId, setDocumentTypeId] = useState(doc.document_type_id || documentTypes[0]?.id || "");
+  const [familyMemberId, setFamilyMemberId] = useState(doc.family_member_id || "");
+  const [libelle, setLibelle] = useState(doc.libelle || "");
+  const [dateDocument, setDateDocument] = useState(doc.date_document || "");
+  const [dateFinValidite, setDateFinValidite] = useState(doc.date_fin_validite || "");
+  const [file, setFile] = useState(null);
+  const [error, setError] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef(null);
+
+  return (
+    <div className="fixed inset-0 bg-stone-900/40 flex items-end sm:items-center justify-center z-20 p-0 sm:p-4">
+      <div className="bg-white rounded-t-xl sm:rounded-xl w-full sm:max-w-lg max-h-[92vh] overflow-y-auto p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="font-serif text-lg text-stone-800">{doc.id ? "Modifier le document" : "Nouveau document"}</h3>
+          <button onClick={onCancel} className="text-stone-400 hover:text-stone-600"><X size={18} /></button>
+        </div>
+
+        <div className="grid sm:grid-cols-2 gap-3">
+          <div>
+            <label className="text-xs text-stone-500 block mb-1">Type de document</label>
+            <select value={documentTypeId} onChange={(e) => setDocumentTypeId(e.target.value)} className="w-full px-2.5 py-1.5 rounded-md border border-stone-300 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-800">
+              {documentTypes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs text-stone-500 block mb-1">Concerne</label>
+            <select value={familyMemberId} onChange={(e) => setFamilyMemberId(e.target.value)} className="w-full px-2.5 py-1.5 rounded-md border border-stone-300 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-800">
+              <option value="">{GENERAL_LABEL}</option>
+              {familyMembers.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+          </div>
+          <div className="sm:col-span-2">
+            <label className="text-xs text-stone-500 block mb-1">Libellé</label>
+            <input value={libelle} onChange={(e) => setLibelle(e.target.value)} placeholder="Ex : Carte d'identité Julia" className="w-full px-2.5 py-1.5 rounded-md border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-800" />
+          </div>
+          <div>
+            <label className="text-xs text-stone-500 block mb-1">Date du document</label>
+            <input type="date" value={dateDocument} onChange={(e) => setDateDocument(e.target.value)} className="w-full px-2.5 py-1.5 rounded-md border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-800" />
+          </div>
+          <div>
+            <label className="text-xs text-stone-500 block mb-1">Date de fin de validité</label>
+            <input type="date" value={dateFinValidite} onChange={(e) => setDateFinValidite(e.target.value)} className="w-full px-2.5 py-1.5 rounded-md border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-800" />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="text-xs text-stone-500 block mb-1">Fichier</label>
+            {doc.file_name && !file && (
+              <p className="text-xs text-stone-500 mb-1.5 flex items-center gap-1.5"><FileText size={13} /> Actuel : {doc.file_name}</p>
+            )}
+            <input
+              ref={fileInputRef}
+              type="file"
+              onChange={(e) => setFile(e.target.files?.[0] || null)}
+              className="w-full text-sm text-stone-600 file:mr-3 file:px-2.5 file:py-1.5 file:rounded-md file:border file:border-stone-300 file:bg-white file:text-sm file:cursor-pointer"
+            />
+            <p className="text-xs text-stone-400 mt-1">{doc.file_name ? "Choisissez un fichier pour le remplacer." : "PDF, photo, scan…"}</p>
+          </div>
+        </div>
+
+        {error && <p className="text-xs text-rose-600">{error}</p>}
+        <div className="flex items-center justify-between pt-1">
+          {onDelete ? (
+            <button onClick={onDelete} className="flex items-center gap-1 text-xs text-rose-600 hover:text-rose-700 px-2 py-1.5">
+              <Trash2 size={14} /> Supprimer
+            </button>
+          ) : <span />}
+          <div className="flex gap-2">
+            <button onClick={onCancel} className="px-3 py-1.5 text-sm rounded-md border border-stone-300 hover:bg-stone-100">Annuler</button>
+            <button
+              disabled={uploading}
+              onClick={async () => {
+                if (!libelle.trim()) { setError("Entrez un libellé."); return; }
+                if (!documentTypeId) { setError("Choisissez un type de document."); return; }
+                setUploading(true);
+                await onSave({ documentTypeId, familyMemberId, libelle: libelle.trim(), dateDocument, dateFinValidite, file });
+                setUploading(false);
+              }}
+              className="px-3 py-1.5 text-sm rounded-md bg-blue-950 text-white hover:bg-blue-900 disabled:opacity-60"
+            >
+              {uploading ? "Enregistrement…" : "Enregistrer"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------- Paramétrage ---------------------------- */
+
+function ColorPicker({ value, onChange }) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {PALETTE.map((c) => (
+        <button
+          key={c}
+          type="button"
+          onClick={() => onChange(c)}
+          className={`w-6 h-6 rounded-full ${SWATCH_BG[c]} ${value === c ? "ring-2 ring-offset-1 ring-stone-800" : ""}`}
+          aria-label={c}
+        >
+          {value === c && <Check size={12} className="text-white mx-auto" />}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function RefListEditor({ title, description, items, placeholder, withColor, onAdd, onUpdate, onUpdateColor, onRemove, blockedMessage }) {
+  const [newName, setNewName] = useState("");
+  const [newColor, setNewColor] = useState(PALETTE[0]);
+  const [error, setError] = useState("");
+
+  return (
+    <div className="bg-white rounded-lg border border-stone-300 p-4 space-y-4">
+      <div>
+        <h2 className="text-sm font-medium text-stone-700">{title}</h2>
+        {description && <p className="text-xs text-stone-400 mt-0.5">{description}</p>}
+      </div>
+      {error && <p className="text-xs text-rose-600">{error}</p>}
+      <ul className="space-y-2">
+        {items.map((it) => (
+          <li key={it.id} className="flex items-center gap-3 border border-stone-200 rounded-md p-2.5">
+            <input
+              value={it.name}
+              onChange={(e) => onUpdate(it.id, e.target.value)}
+              className="flex-1 min-w-0 px-2 py-1 rounded border border-stone-200 text-sm focus:outline-none focus:ring-2 focus:ring-stone-400"
+            />
+            {withColor && <ColorPicker value={it.color || "stone"} onChange={(color) => onUpdateColor(it.id, color)} />}
+            <button
+              onClick={async () => {
+                const ok = await onRemove(it.id);
+                if (!ok) setError(blockedMessage(it.name));
+                else setError("");
+              }}
+              className="text-stone-400 hover:text-rose-600 shrink-0"
+              aria-label={`Supprimer ${it.name}`}
+            >
+              <Trash2 size={15} />
+            </button>
+          </li>
+        ))}
+        {items.length === 0 && <p className="text-sm text-stone-400 py-2">Aucun élément pour l'instant.</p>}
+      </ul>
+      <div className="border-t border-stone-100 pt-3 flex flex-wrap items-end gap-3">
+        <div>
+          <label className="text-xs text-stone-500 block mb-1">Nouveau</label>
+          <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder={placeholder} className="px-2.5 py-1.5 rounded-md border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-stone-400" />
+        </div>
+        {withColor && (
+          <div>
+            <label className="text-xs text-stone-500 block mb-1">Couleur</label>
+            <ColorPicker value={newColor} onChange={setNewColor} />
+          </div>
+        )}
+        <button
+          onClick={() => { if (newName.trim()) { onAdd(newName.trim(), withColor ? newColor : undefined); setNewName(""); } }}
+          className="px-3 py-1.5 text-sm rounded-md border border-stone-400 text-stone-700 hover:bg-stone-100"
+        >
+          <Plus size={14} className="inline -mt-0.5 mr-1" />Ajouter
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ImportContactsPanel({ contactTypes, familyMembers, onImportContacts }) {
+  const [rows, setRows] = useState(null); // null = pas de fichier chargé
+  const [bulkType, setBulkType] = useState(contactTypes[0]?.id || "");
+  const [bulkMember, setBulkMember] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [result, setResult] = useState("");
+  const fileInputRef = useRef(null);
+
+  function handleFile(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setResult("");
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = parseVCardFile(String(reader.result));
+        setRows(
+          parsed.map((r, i) => ({
+            ...r,
+            id: i,
+            selected: true,
+            contactTypeId: bulkType,
+            familyMemberId: bulkMember,
+          }))
+        );
+      } catch (err) {
+        setResult("Impossible de lire ce fichier. Vérifiez qu'il s'agit bien d'un export .vcf.");
+      }
+    };
+    reader.readAsText(file, "utf-8");
+  }
+
+  function applyBulk() {
+    setRows((rs) => rs.map((r) => ({ ...r, contactTypeId: bulkType, familyMemberId: bulkMember })));
+  }
+
+  async function handleImport() {
+    const selected = rows.filter((r) => r.selected && r.contactTypeId);
+    if (selected.length === 0) return;
+    setImporting(true);
+    const ok = await onImportContacts(selected);
+    setImporting(false);
+    if (ok) {
+      setResult(`${selected.length} contact(s) importé(s).`);
+      setRows(null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  return (
+    <div className="bg-white rounded-lg border border-stone-300 p-4 space-y-4">
+      <div>
+        <h2 className="text-sm font-medium text-stone-700 flex items-center gap-1.5"><UploadCloud size={15} /> Importer des contacts (.vcf)</h2>
+        <p className="text-xs text-stone-400 mt-0.5">
+          Exportez vos contacts depuis votre téléphone (Android : Contacts &gt; Paramètres &gt; Exporter ; iPhone : via iCloud.com ou un partage vCard),
+          puis chargez le fichier .vcf ici. Vous choisirez le type et le membre concerné avant l'import — rien n'est enregistré tant que vous n'avez pas validé.
+        </p>
+      </div>
+
+      {rows === null && (
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".vcf,text/vcard"
+          onChange={handleFile}
+          className="w-full text-sm text-stone-600 file:mr-3 file:px-2.5 file:py-1.5 file:rounded-md file:border file:border-stone-300 file:bg-white file:text-sm file:cursor-pointer"
+        />
+      )}
+
+      {result && <p className="text-xs text-emerald-700">{result}</p>}
+
+      {rows !== null && (
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-end gap-3 bg-stone-50 border border-stone-200 rounded-md p-3">
+            <div>
+              <label className="text-xs text-stone-500 block mb-1">Type pour tous</label>
+              <select value={bulkType} onChange={(e) => setBulkType(e.target.value)} className="px-2.5 py-1.5 rounded-md border border-stone-300 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-800">
+                {contactTypes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs text-stone-500 block mb-1">Membre pour tous</label>
+              <select value={bulkMember} onChange={(e) => setBulkMember(e.target.value)} className="px-2.5 py-1.5 rounded-md border border-stone-300 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-800">
+                <option value="">{GENERAL_LABEL}</option>
+                {familyMembers.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+              </select>
+            </div>
+            <button onClick={applyBulk} className="px-3 py-1.5 text-sm rounded-md border border-stone-400 text-stone-700 hover:bg-white">Appliquer à tous</button>
+            <button onClick={() => { setRows(null); if (fileInputRef.current) fileInputRef.current.value = ""; }} className="ml-auto text-xs text-stone-500 hover:text-stone-700 underline">Charger un autre fichier</button>
+          </div>
+
+          <p className="text-xs text-stone-500">{rows.length} contact(s) trouvé(s) dans le fichier. Décochez ceux à ne pas importer, ajustez le type/membre au cas par cas si besoin.</p>
+
+          <div className="max-h-96 overflow-y-auto divide-y divide-stone-100 border border-stone-200 rounded-md">
+            {rows.map((r, idx) => (
+              <div key={r.id} className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={r.selected}
+                  onChange={(e) => setRows((rs) => rs.map((x, i) => (i === idx ? { ...x, selected: e.target.checked } : x)))}
+                />
+                <span className="min-w-[160px] flex-1 truncate">{r.fullName}{r.org ? ` — ${r.org}` : ""}</span>
+                <select
+                  value={r.contactTypeId}
+                  onChange={(e) => setRows((rs) => rs.map((x, i) => (i === idx ? { ...x, contactTypeId: e.target.value } : x)))}
+                  className="px-2 py-1 rounded-md border border-stone-300 bg-white text-xs"
+                >
+                  {contactTypes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+                <select
+                  value={r.familyMemberId}
+                  onChange={(e) => setRows((rs) => rs.map((x, i) => (i === idx ? { ...x, familyMemberId: e.target.value } : x)))}
+                  className="px-2 py-1 rounded-md border border-stone-300 bg-white text-xs"
+                >
+                  <option value="">{GENERAL_LABEL}</option>
+                  {familyMembers.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                </select>
+              </div>
+            ))}
+          </div>
+
+          <button
+            disabled={importing || rows.every((r) => !r.selected)}
+            onClick={handleImport}
+            className="px-3 py-1.5 text-sm rounded-md bg-blue-950 text-white hover:bg-blue-900 disabled:opacity-60"
+          >
+            {importing ? "Import en cours…" : `Importer ${rows.filter((r) => r.selected).length} contact(s)`}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CoffreSettingsTab({ familyMembers, contactTypes, documentTypes, contacts, documents, onAddRef, onAddContactType, onUpdateRef, onRemoveRef, onUpdateContactTypeColor, onImportContacts }) {
+  return (
+    <div className="max-w-3xl mx-auto p-5 sm:p-8 space-y-6">
+      <div>
+        <h1 className="font-serif text-2xl text-stone-700 tracking-tight">Paramétrage</h1>
+        <p className="text-stone-500 text-sm mt-1">Membres de la famille, types de contact, types de document, et import.</p>
+      </div>
+
+      <RefListEditor
+        title="Membres de la famille"
+        description="Utilisés pour rattacher un contact ou un document à une personne (ou à « Général »)."
+        items={familyMembers}
+        placeholder="Prénom"
+        onAdd={(name) => onAddRef("family_members", name)}
+        onUpdate={(id, name) => onUpdateRef("family_members", id, name)}
+        onRemove={(id) => onRemoveRef("family_members", id)}
+        blockedMessage={(name) => `« ${name} » est encore utilisé par des contacts ou documents : réaffectez-les avant de le supprimer.`}
+      />
+
+      <RefListEditor
+        title="Types de contact"
+        description="Ex : Personnel, Travail, Société, Artisan…"
+        items={contactTypes}
+        placeholder="Nom du type"
+        withColor
+        onAdd={(name, color) => onAddContactType(name, color)}
+        onUpdate={(id, name) => onUpdateRef("contact_types", id, name)}
+        onUpdateColor={onUpdateContactTypeColor}
+        onRemove={(id) => onRemoveRef("contact_types", id)}
+        blockedMessage={(name) => `« ${name} » est utilisé par des contacts : réaffectez-les avant de le supprimer.`}
+      />
+
+      <RefListEditor
+        title="Types de document"
+        description="Ex : Carte d'identité, Permis de conduire, Justificatif de domicile, Passeport, Carnet de santé…"
+        items={documentTypes}
+        placeholder="Nom du type"
+        onAdd={(name) => onAddRef("document_types", name)}
+        onUpdate={(id, name) => onUpdateRef("document_types", id, name)}
+        onRemove={(id) => onRemoveRef("document_types", id)}
+        blockedMessage={(name) => `« ${name} » est utilisé par des documents : réaffectez-les avant de le supprimer.`}
+      />
+
+      <ImportContactsPanel contactTypes={contactTypes} familyMembers={familyMembers} onImportContacts={onImportContacts} />
+    </div>
+  );
+}
