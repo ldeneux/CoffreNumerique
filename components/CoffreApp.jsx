@@ -323,7 +323,7 @@ export default function CoffreApp({ session }) {
     <div className="w-full min-h-screen bg-stone-50 font-sans text-stone-900 flex">
       <aside className="w-56 shrink-0 bg-stone-100 border-r border-stone-200 min-h-screen p-4 hidden sm:flex flex-col">
         <div className="mb-6 px-1 flex flex-col items-center text-center gap-2">
-          <img src="/icon-nav.png" alt="" width={108} height={108} className="rounded-2xl shrink-0" />
+          <img src="/icon-nav.png" alt="" width={80} height={80} className="rounded-2xl shrink-0" />
           <div className="min-w-0">
             <p className="font-serif text-lg text-blue-950 leading-tight">Coffre numérique</p>
             <p className="text-xs text-stone-500 truncate">{session.user.email}</p>
@@ -1269,16 +1269,19 @@ function EventsTab({ contacts, documents, familyMemberById, documentTypeById, on
         {favoriteContacts.length > 0 && birthdays.length === 0 && (
           <p className="text-sm text-stone-400">Aucun anniversaire de favori dans les 3 prochains mois.</p>
         )}
-        {birthdays.map(({ contact: c, occ }) => (
-          <div key={c.id} className="flex items-center gap-3 px-1 py-1.5 border-b border-stone-50 last:border-0">
-            <Cake size={16} className="text-stone-400 shrink-0" />
-            <div className="min-w-0 flex-1">
-              <p className="text-sm text-stone-800 truncate">{contactDisplayName(c)} <span className="text-stone-400">— {occ.turningAge} ans</span></p>
+        {birthdays.map(({ contact: c, occ }) => {
+          const isToday = occ.date.getTime() === start.getTime();
+          return (
+            <div key={c.id} className="flex items-center gap-3 px-1 py-1.5 border-b border-stone-50 last:border-0">
+              <Cake size={16} className={isToday ? "text-rose-500 shrink-0" : "text-stone-400 shrink-0"} />
+              <div className="min-w-0 flex-1">
+                <p className="text-sm text-stone-800 truncate">{contactDisplayName(c)} <span className="text-stone-400">— {occ.turningAge} ans</span></p>
+              </div>
+              <span className={`text-xs shrink-0 ${isToday ? "text-rose-600 font-medium" : "text-stone-500"}`}>{isToday ? "Aujourd'hui" : formatDayMonthFR(occ.date)}</span>
+              <span className="shrink-0"><MemberBadge member={familyMemberById[c.family_member_id]} /></span>
             </div>
-            <span className="text-xs text-stone-500 shrink-0">{formatDayMonthFR(occ.date)}</span>
-            <span className="shrink-0"><MemberBadge member={familyMemberById[c.family_member_id]} /></span>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <div className="bg-white rounded-lg border border-stone-200 p-4 space-y-3">
