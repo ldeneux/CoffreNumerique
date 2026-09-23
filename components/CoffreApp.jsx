@@ -20,6 +20,11 @@ import {
   Building2,
   AlertTriangle,
   UploadCloud,
+  Star,
+  CalendarDays,
+  CheckSquare,
+  Square,
+  PartyPopper,
 } from "lucide-react";
 import { supabase, DOCUMENTS_BUCKET } from "../lib/supabaseClient";
 import { parseVCardFile } from "../lib/vcard";
@@ -87,7 +92,28 @@ function fileExtIcon() {
   return <FileText size={15} />;
 }
 
+// Fenêtre "3 prochains mois" (mois en cours + 2 suivants) utilisée par l'onglet Événements
+function eventsWindow() {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const end = new Date(today.getFullYear(), today.getMonth() + 3, 0); // dernier jour du mois+2
+  end.setHours(23, 59, 59, 999);
+  return { start: today, end };
+}
+function nextBirthdayOccurrence(dateNaissance, today) {
+  if (!dateNaissance) return null;
+  const d = new Date(dateNaissance + "T00:00:00");
+  if (isNaN(d.getTime())) return null;
+  let occ = new Date(today.getFullYear(), d.getMonth(), d.getDate());
+  if (occ < today) occ = new Date(today.getFullYear() + 1, d.getMonth(), d.getDate());
+  return { date: occ, turningAge: occ.getFullYear() - d.getFullYear() };
+}
+function formatDayMonthFR(d) {
+  return new Intl.DateTimeFormat("fr-FR", { day: "2-digit", month: "long" }).format(d);
+}
+
 const NAV_ITEMS = [
+  { key: "events", label: "Événements", icon: CalendarDays },
   { key: "contacts", label: "Contacts", icon: Users },
   { key: "documents", label: "Documents", icon: FolderOpen },
 ];
@@ -172,6 +198,7 @@ export default function CoffreApp({ session }) {
       code_postal: fields.codePostal,
       ville: fields.ville,
       date_naissance: fields.dateNaissance || null,
+      favori: !!fields.favori,
       notes: fields.notes,
     };
     const { error } = existingId
@@ -186,26 +213,33 @@ export default function CoffreApp({ session }) {
     if (error) setErrorMsg("Impossible de supprimer ce contact.");
     else fetchAll();
   }
+  // Insertion ligne par ligne : une fiche invalide (ex: numéro de téléphone
+  // mal formé, doublon...) ne doit pas bloquer l'import des autres.
   async function importContacts(rows) {
-    const payload = rows.map((r) => ({
-      contact_type_id: r.contactTypeId,
-      family_member_id: r.familyMemberId || null,
-      nom: r.lastName,
-      prenom: r.firstName,
-      societe: r.org,
-      telephone_mobile: r.mobile,
-      telephone_fixe: r.phone2,
-      email: r.email,
-      adresse: r.address?.street || "",
-      code_postal: r.address?.postalCode || "",
-      ville: r.address?.city || "",
-      date_naissance: r.birthday || null,
-      notes: "",
-    }));
-    const { error } = await supabase.from("contacts").insert(payload);
-    if (error) { setErrorMsg("Impossible d'importer certains contacts."); return false; }
+    let successCount = 0;
+    const failures = [];
+    for (const r of rows) {
+      const payload = {
+        contact_type_id: r.contactTypeId,
+        family_member_id: r.familyMemberId || null,
+        nom: r.lastName,
+        prenom: r.firstName,
+        societe: r.org,
+        telephone_mobile: r.mobile,
+        telephone_fixe: r.phone2,
+        email: r.email,
+        adresse: r.address?.street || "",
+        code_postal: r.address?.postalCode || "",
+        ville: r.address?.city || "",
+        date_naissance: r.birthday || null,
+        notes: "",
+      };
+      const { error } = await supabase.from("contacts").insert(payload);
+      if (error) failures.push({ id: r.id, message: error.message });
+      else successCount++;
+    }
     fetchAll();
-    return true;
+    return { successCount, failures };
   }
 
   // --- Documents ---
@@ -288,9 +322,12 @@ export default function CoffreApp({ session }) {
   return (
     <div className="w-full min-h-screen bg-stone-50 font-sans text-stone-900 flex">
       <aside className="w-56 shrink-0 bg-stone-100 border-r border-stone-200 min-h-screen p-4 hidden sm:flex flex-col">
-        <div className="mb-6 px-1">
-          <p className="font-serif text-lg text-blue-950">Coffre numérique</p>
-          <p className="text-xs text-stone-500 truncate">{session.user.email}</p>
+        <div className="mb-6 px-1 flex items-center gap-2.5">
+          <img src="/icon-nav.png" alt="" width={36} height={36} className="rounded-lg shrink-0" />
+          <div className="min-w-0">
+            <p className="font-serif text-lg text-blue-950 leading-tight">Coffre numérique</p>
+            <p className="text-xs text-stone-500 truncate">{session.user.email}</p>
+          </div>
         </div>
         <nav className="space-y-1 flex-1">
           {NAV_ITEMS.map((item) => {
@@ -348,6 +385,16 @@ export default function CoffreApp({ session }) {
             <span>{errorMsg}</span>
             <button onClick={() => setErrorMsg("")} className="text-rose-400 hover:text-rose-600 shrink-0"><X size={14} /></button>
           </div>
+        )}
+
+        {activeTab === "events" && (
+          <EventsTab
+            contacts={contacts}
+            documents={documents}
+            familyMemberById={familyMemberById}
+            documentTypeById={documentTypeById}
+            onGoToContacts={() => setActiveTab("contacts")}
+          />
         )}
 
         {activeTab === "contacts" && (
@@ -417,6 +464,29 @@ function ContactsTab({ contacts, contactTypes, familyMembers, contactTypeById, f
   const [filterMember, setFilterMember] = useState("");
   const [editing, setEditing] = useState(null); // null = closed, {} = new, {...} = edit
   const [openId, setOpenId] = useState(null);
+
+  function toggleFavori(c, e) {
+    e.stopPropagation();
+    onSave(
+      {
+        contactTypeId: c.contact_type_id,
+        familyMemberId: c.family_member_id,
+        nom: c.nom,
+        prenom: c.prenom,
+        societe: c.societe,
+        telephoneMobile: c.telephone_mobile,
+        telephoneFixe: c.telephone_fixe,
+        email: c.email,
+        adresse: c.adresse,
+        codePostal: c.code_postal,
+        ville: c.ville,
+        dateNaissance: c.date_naissance,
+        notes: c.notes,
+        favori: !c.favori,
+      },
+      c.id
+    );
+  }
 
   const filtered = useMemo(() => {
     const q = normalizeStr(search);
@@ -491,6 +561,13 @@ function ContactsTab({ contacts, contactTypes, familyMembers, contactTypeById, f
                     {[c.telephone_mobile || c.telephone_fixe, c.email].filter(Boolean).join(" · ") || "—"}
                   </p>
                 </div>
+                <button
+                  onClick={(e) => toggleFavori(c, e)}
+                  title={c.favori ? "Retirer des favoris" : "Marquer en favori"}
+                  className="shrink-0 text-amber-400 hover:text-amber-500"
+                >
+                  <Star size={17} fill={c.favori ? "currentColor" : "none"} />
+                </button>
                 <div className="hidden sm:flex items-center gap-1.5 shrink-0">
                   <TypeBadge type={contactTypeById[c.contact_type_id]} />
                   <MemberBadge member={familyMemberById[c.family_member_id]} />
@@ -552,6 +629,7 @@ function ContactEditor({ contact, contactTypes, familyMembers, onSave, onCancel,
   const [ville, setVille] = useState(contact.ville || "");
   const [dateNaissance, setDateNaissance] = useState(contact.date_naissance || "");
   const [notes, setNotes] = useState(contact.notes || "");
+  const [favori, setFavori] = useState(!!contact.favori);
   const [error, setError] = useState("");
 
   return (
@@ -559,7 +637,17 @@ function ContactEditor({ contact, contactTypes, familyMembers, onSave, onCancel,
       <div className="bg-white rounded-t-xl sm:rounded-xl w-full sm:max-w-lg max-h-[92vh] overflow-y-auto p-5 space-y-4">
         <div className="flex items-center justify-between">
           <h3 className="font-serif text-lg text-stone-800">{contact.id ? "Modifier le contact" : "Nouveau contact"}</h3>
-          <button onClick={onCancel} className="text-stone-400 hover:text-stone-600"><X size={18} /></button>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setFavori((f) => !f)}
+              title={favori ? "Retirer des favoris" : "Marquer en favori"}
+              className="text-amber-400 hover:text-amber-500"
+            >
+              <Star size={19} fill={favori ? "currentColor" : "none"} />
+            </button>
+            <button onClick={onCancel} className="text-stone-400 hover:text-stone-600"><X size={18} /></button>
+          </div>
         </div>
 
         <div className="grid sm:grid-cols-2 gap-3">
@@ -638,7 +726,7 @@ function ContactEditor({ contact, contactTypes, familyMembers, onSave, onCancel,
                 onSave({
                   contactTypeId, familyMemberId, nom: nom.trim(), prenom: prenom.trim(), societe: societe.trim(),
                   telephoneMobile: telephoneMobile.trim(), telephoneFixe: telephoneFixe.trim(), email: email.trim(),
-                  adresse: adresse.trim(), codePostal: codePostal.trim(), ville: ville.trim(), dateNaissance, notes: notes.trim(),
+                  adresse: adresse.trim(), codePostal: codePostal.trim(), ville: ville.trim(), dateNaissance, notes: notes.trim(), favori,
                 });
               }}
               className="px-3 py-1.5 text-sm rounded-md bg-blue-950 text-white hover:bg-blue-900"
@@ -967,12 +1055,22 @@ function ImportContactsPanel({ contactTypes, familyMembers, onImportContacts }) 
     const selected = rows.filter((r) => r.selected && r.contactTypeId);
     if (selected.length === 0) return;
     setImporting(true);
-    const ok = await onImportContacts(selected);
+    const { successCount, failures } = await onImportContacts(selected);
     setImporting(false);
-    if (ok) {
-      setResult(`${selected.length} contact(s) importé(s).`);
+    const failedIds = new Set(failures.map((f) => f.id));
+    if (failures.length === 0) {
+      setResult(`${successCount} contact(s) importé(s).`);
       setRows(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
+    } else {
+      setResult(
+        `${successCount} contact(s) importé(s). ${failures.length} en échec (voir ci-dessous) — corrigez et relancez l'import pour ceux-là.`
+      );
+      setRows((rs) =>
+        rs
+          .filter((r) => failedIds.has(r.id))
+          .map((r) => ({ ...r, selected: true, importError: failures.find((f) => f.id === r.id)?.message || "" }))
+      );
     }
   }
 
@@ -996,7 +1094,7 @@ function ImportContactsPanel({ contactTypes, familyMembers, onImportContacts }) 
         />
       )}
 
-      {result && <p className="text-xs text-emerald-700">{result}</p>}
+      {result && <p className={`text-xs ${result.includes("échec") ? "text-amber-700" : "text-emerald-700"}`}>{result}</p>}
 
       {rows !== null && (
         <div className="space-y-3">
@@ -1015,6 +1113,22 @@ function ImportContactsPanel({ contactTypes, familyMembers, onImportContacts }) 
               </select>
             </div>
             <button onClick={applyBulk} className="px-3 py-1.5 text-sm rounded-md border border-stone-400 text-stone-700 hover:bg-white">Appliquer à tous</button>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setRows((rs) => rs.map((r) => ({ ...r, selected: true })))}
+                title="Tout sélectionner"
+                className="p-1.5 rounded-md border border-stone-300 text-stone-600 hover:bg-white"
+              >
+                <CheckSquare size={16} />
+              </button>
+              <button
+                onClick={() => setRows((rs) => rs.map((r) => ({ ...r, selected: false })))}
+                title="Tout désélectionner"
+                className="p-1.5 rounded-md border border-stone-300 text-stone-600 hover:bg-white"
+              >
+                <Square size={16} />
+              </button>
+            </div>
             <button onClick={() => { setRows(null); if (fileInputRef.current) fileInputRef.current.value = ""; }} className="ml-auto text-xs text-stone-500 hover:text-stone-700 underline">Charger un autre fichier</button>
           </div>
 
@@ -1028,7 +1142,10 @@ function ImportContactsPanel({ contactTypes, familyMembers, onImportContacts }) 
                   checked={r.selected}
                   onChange={(e) => setRows((rs) => rs.map((x, i) => (i === idx ? { ...x, selected: e.target.checked } : x)))}
                 />
-                <span className="min-w-[160px] flex-1 truncate">{r.fullName}{r.org ? ` — ${r.org}` : ""}</span>
+                <span className="min-w-[160px] flex-1 truncate">
+                  {r.fullName}{r.org ? ` — ${r.org}` : ""}
+                  {r.importError && <span className="block text-xs text-rose-600">{r.importError}</span>}
+                </span>
                 <select
                   value={r.contactTypeId}
                   onChange={(e) => setRows((rs) => rs.map((x, i) => (i === idx ? { ...x, contactTypeId: e.target.value } : x)))}
@@ -1105,6 +1222,87 @@ function CoffreSettingsTab({ familyMembers, contactTypes, documentTypes, contact
       />
 
       <ImportContactsPanel contactTypes={contactTypes} familyMembers={familyMembers} onImportContacts={onImportContacts} />
+    </div>
+  );
+}
+
+/* ---------------------------- Événements ---------------------------- */
+
+function EventsTab({ contacts, documents, familyMemberById, documentTypeById, onGoToContacts }) {
+  const { start, end } = useMemo(() => eventsWindow(), []);
+
+  const favoriteContacts = useMemo(() => contacts.filter((c) => c.favori), [contacts]);
+
+  const birthdays = useMemo(() => {
+    return favoriteContacts
+      .filter((c) => c.date_naissance)
+      .map((c) => ({ contact: c, occ: nextBirthdayOccurrence(c.date_naissance, start) }))
+      .filter((x) => x.occ && x.occ.date <= end)
+      .sort((a, b) => a.occ.date - b.occ.date);
+  }, [favoriteContacts, start, end]);
+
+  const expiringDocs = useMemo(() => {
+    return documents
+      .filter((d) => d.date_fin_validite)
+      .map((d) => ({ doc: d, date: new Date(d.date_fin_validite + "T00:00:00") }))
+      .filter((x) => x.date >= start && x.date <= end)
+      .sort((a, b) => a.date - b.date);
+  }, [documents, start, end]);
+
+  const periodLabel = `${new Intl.DateTimeFormat("fr-FR", { month: "long" }).format(start)} → ${new Intl.DateTimeFormat("fr-FR", { month: "long", year: "numeric" }).format(end)}`;
+
+  return (
+    <div className="max-w-4xl mx-auto p-5 sm:p-8 space-y-6">
+      <div>
+        <h1 className="font-serif text-2xl text-blue-950 tracking-tight">Événements</h1>
+        <p className="text-stone-500 text-sm mt-1">Sur les 3 prochains mois ({periodLabel}) : anniversaires des favoris et documents à renouveler.</p>
+      </div>
+
+      <div className="bg-white rounded-lg border border-stone-200 p-4 space-y-3">
+        <h2 className="text-sm font-medium text-stone-700 flex items-center gap-1.5"><PartyPopper size={16} className="text-amber-500" /> Anniversaires</h2>
+        {favoriteContacts.length === 0 && (
+          <p className="text-sm text-stone-400">
+            Aucun contact en favori pour l'instant.{" "}
+            <button onClick={onGoToContacts} className="text-blue-800 underline">Marquez-en depuis l'onglet Contacts</button> (icône étoile) pour les voir apparaître ici.
+          </p>
+        )}
+        {favoriteContacts.length > 0 && birthdays.length === 0 && (
+          <p className="text-sm text-stone-400">Aucun anniversaire de favori dans les 3 prochains mois.</p>
+        )}
+        {birthdays.map(({ contact: c, occ }) => (
+          <div key={c.id} className="flex items-center gap-3 px-1 py-1.5 border-b border-stone-50 last:border-0">
+            <Cake size={16} className="text-stone-400 shrink-0" />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm text-stone-800 truncate">{contactDisplayName(c)} <span className="text-stone-400">— {occ.turningAge} ans</span></p>
+            </div>
+            <span className="text-xs text-stone-500 shrink-0">{formatDayMonthFR(occ.date)}</span>
+            <span className="shrink-0"><MemberBadge member={familyMemberById[c.family_member_id]} /></span>
+          </div>
+        ))}
+      </div>
+
+      <div className="bg-white rounded-lg border border-stone-200 p-4 space-y-3">
+        <h2 className="text-sm font-medium text-stone-700 flex items-center gap-1.5"><AlertTriangle size={16} className="text-amber-500" /> Documents à renouveler</h2>
+        {expiringDocs.length === 0 && (
+          <p className="text-sm text-stone-400">Aucun document n'expire dans les 3 prochains mois.</p>
+        )}
+        {expiringDocs.map(({ doc: d, date }) => {
+          const remaining = daysUntil(d.date_fin_validite);
+          const expired = remaining !== null && remaining < 0;
+          return (
+            <div key={d.id} className="flex items-center gap-3 px-1 py-1.5 border-b border-stone-50 last:border-0">
+              <FileText size={16} className="text-stone-400 shrink-0" />
+              <div className="min-w-0 flex-1">
+                <p className="text-sm text-stone-800 truncate">{d.libelle} <span className="text-stone-400">— {documentTypeById[d.document_type_id]?.name}</span></p>
+              </div>
+              <span className={`text-xs shrink-0 ${expired ? "text-rose-600" : "text-amber-600"}`}>
+                {expired ? "Expiré le" : "Jusqu'au"} {formatDateFR(d.date_fin_validite)}
+              </span>
+              <span className="shrink-0"><MemberBadge member={familyMemberById[d.family_member_id]} /></span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

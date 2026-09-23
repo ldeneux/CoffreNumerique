@@ -47,6 +47,7 @@ create table if not exists coffre.contacts (
   code_postal text,
   ville text,
   date_naissance date,
+  favori boolean not null default false,
   notes text,
   created_at timestamptz not null default now(),
   constraint contact_has_a_name check (coalesce(nom, '') <> '' or coalesce(societe, '') <> '')
