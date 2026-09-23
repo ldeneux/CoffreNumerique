@@ -322,8 +322,8 @@ export default function CoffreApp({ session }) {
   return (
     <div className="w-full min-h-screen bg-stone-50 font-sans text-stone-900 flex">
       <aside className="w-56 shrink-0 bg-stone-100 border-r border-stone-200 min-h-screen p-4 hidden sm:flex flex-col">
-        <div className="mb-6 px-1 flex items-center gap-2.5">
-          <img src="/icon-nav.png" alt="" width={36} height={36} className="rounded-lg shrink-0" />
+        <div className="mb-6 px-1 flex flex-col items-center text-center gap-2">
+          <img src="/icon-nav.png" alt="" width={108} height={108} className="rounded-2xl shrink-0" />
           <div className="min-w-0">
             <p className="font-serif text-lg text-blue-950 leading-tight">Coffre numérique</p>
             <p className="text-xs text-stone-500 truncate">{session.user.email}</p>
