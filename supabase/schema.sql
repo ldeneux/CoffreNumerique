@@ -25,6 +25,14 @@ create table if not exists coffre.contact_types (
   created_at timestamptz not null default now()
 );
 
+-- Activités des contacts (Général, Plombier, Médecin...) : sert de filtre
+create table if not exists coffre.activities (
+  id uuid primary key default gen_random_uuid(),
+  name text not null unique,
+  color text not null default 'stone',
+  created_at timestamptz not null default now()
+);
+
 -- Types de document (Carte d'identité, Permis de conduire...)
 create table if not exists coffre.document_types (
   id uuid primary key default gen_random_uuid(),
@@ -36,9 +44,11 @@ create table if not exists coffre.document_types (
 create table if not exists coffre.contacts (
   id uuid primary key default gen_random_uuid(),
   contact_type_id uuid not null references coffre.contact_types(id) on delete restrict,
+  activity_id uuid references coffre.activities(id) on delete restrict,
   family_member_id uuid references coffre.family_members(id) on delete set null,
   nom text,
   prenom text,
+  alias text,
   societe text,
   telephone_mobile text,
   telephone_fixe text,
@@ -71,6 +81,7 @@ create table if not exists coffre.documents (
 -- Seuls les comptes authentifiés (créés manuellement, voir README) peuvent lire/écrire.
 alter table coffre.family_members enable row level security;
 alter table coffre.contact_types enable row level security;
+alter table coffre.activities enable row level security;
 alter table coffre.document_types enable row level security;
 alter table coffre.contacts enable row level security;
 alter table coffre.documents enable row level security;
@@ -84,6 +95,11 @@ create policy "authenticated can read contact_types" on coffre.contact_types for
 create policy "authenticated can write contact_types" on coffre.contact_types for insert with check (auth.role() = 'authenticated');
 create policy "authenticated can update contact_types" on coffre.contact_types for update using (auth.role() = 'authenticated');
 create policy "authenticated can delete contact_types" on coffre.contact_types for delete using (auth.role() = 'authenticated');
+
+create policy "authenticated can read activities" on coffre.activities for select using (auth.role() = 'authenticated');
+create policy "authenticated can write activities" on coffre.activities for insert with check (auth.role() = 'authenticated');
+create policy "authenticated can update activities" on coffre.activities for update using (auth.role() = 'authenticated');
+create policy "authenticated can delete activities" on coffre.activities for delete using (auth.role() = 'authenticated');
 
 create policy "authenticated can read document_types" on coffre.document_types for select using (auth.role() = 'authenticated');
 create policy "authenticated can write document_types" on coffre.document_types for insert with check (auth.role() = 'authenticated');
@@ -103,6 +119,7 @@ create policy "authenticated can delete documents" on coffre.documents for delet
 -- Active le temps réel (pour que tous les comptes voient les mises à jour instantanément)
 alter publication supabase_realtime add table coffre.family_members;
 alter publication supabase_realtime add table coffre.contact_types;
+alter publication supabase_realtime add table coffre.activities;
 alter publication supabase_realtime add table coffre.document_types;
 alter publication supabase_realtime add table coffre.contacts;
 alter publication supabase_realtime add table coffre.documents;
@@ -125,6 +142,9 @@ insert into coffre.contact_types (name, color) values
   ('Travail', 'violet'),
   ('Société', 'teal'),
   ('Artisan', 'amber')
+on conflict (name) do nothing;
+
+insert into coffre.activities (name, color) values ('Général', 'stone')
 on conflict (name) do nothing;
 
 insert into coffre.document_types (name) values

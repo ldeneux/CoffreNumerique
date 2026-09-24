@@ -75,6 +75,56 @@ function contactDisplayName(c) {
 function contactSortKey(c) {
   return normalizeStr(c.societe ? c.societe : `${c.nom || ""} ${c.prenom || ""}`);
 }
+// Titre affiché sur la ligne : "NOM Prénom (alias)" — l'alias n'apparaît que s'il est renseigné.
+function contactTitle(c) {
+  const alias = (c.alias || "").trim();
+  return alias ? `${contactDisplayName(c)} (${alias})` : contactDisplayName(c);
+}
+// "Général" (type de contact ou activité) : valeur par défaut, jamais affichée en badge.
+function isGeneralName(name) {
+  return normalizeStr(name) === normalizeStr(GENERAL_LABEL);
+}
+
+// Téléphone au format international compact (+33612345678), utilisé pour la copie.
+// 06 12 34 56 78 -> +33612345678 ; 0033 6... -> +336... ; +33 (0)6... -> +336...
+function toInternationalPhone(raw) {
+  if (!raw) return "";
+  let t = String(raw).trim().replace(/[\s.\-()/]/g, "");
+  if (!t) return "";
+  if (t.startsWith("00")) t = "+" + t.slice(2);
+  if (t.startsWith("+330")) t = "+33" + t.slice(4);
+  else if (!t.startsWith("+") && /^0\d{9}$/.test(t)) t = "+33" + t.slice(1);
+  return t;
+}
+// Même numéro, groupé pour la lecture : +33 6 12 34 56 78 (autres pays : format compact).
+function formatPhoneDisplay(raw) {
+  const intl = toInternationalPhone(raw);
+  const m = intl.match(/^\+33(\d)(\d{2})(\d{2})(\d{2})(\d{2})$/);
+  return m ? `+33 ${m[1]} ${m[2]} ${m[3]} ${m[4]} ${m[5]}` : intl || String(raw || "");
+}
+async function copyToClipboard(text) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (e) {
+    /* on retombe sur la méthode de secours ci-dessous */
+  }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch (e) {
+    return false;
+  }
+}
 function formatDateFR(d) {
   if (!d) return "";
   const dt = new Date(d + "T00:00:00");
@@ -122,6 +172,7 @@ export default function CoffreApp({ session }) {
   const [activeTab, setActiveTab] = useState("contacts");
   const [familyMembers, setFamilyMembers] = useState([]);
   const [contactTypes, setContactTypes] = useState([]);
+  const [activities, setActivities] = useState([]);
   const [documentTypes, setDocumentTypes] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [documents, setDocuments] = useState([]);
@@ -130,15 +181,17 @@ export default function CoffreApp({ session }) {
 
   const fetchAll = useCallback(async () => {
     try {
-      const [{ data: fm }, { data: ct }, { data: dt }, { data: cs }, { data: docs }] = await Promise.all([
+      const [{ data: fm }, { data: ct }, { data: ac }, { data: dt }, { data: cs }, { data: docs }] = await Promise.all([
         supabase.from("family_members").select("*").order("name", { ascending: true }),
         supabase.from("contact_types").select("*").order("name", { ascending: true }),
+        supabase.from("activities").select("*").order("name", { ascending: true }),
         supabase.from("document_types").select("*").order("name", { ascending: true }),
         supabase.from("contacts").select("*"),
         supabase.from("documents").select("*"),
       ]);
       setFamilyMembers(fm || []);
       setContactTypes(ct || []);
+      setActivities(ac || []);
       setDocumentTypes(dt || []);
       setContacts(cs || []);
       setDocuments(docs || []);
@@ -158,6 +211,7 @@ export default function CoffreApp({ session }) {
       .on("postgres_changes", { event: "*", schema: "coffre", table: "documents" }, fetchAll)
       .on("postgres_changes", { event: "*", schema: "coffre", table: "family_members" }, fetchAll)
       .on("postgres_changes", { event: "*", schema: "coffre", table: "contact_types" }, fetchAll)
+      .on("postgres_changes", { event: "*", schema: "coffre", table: "activities" }, fetchAll)
       .on("postgres_changes", { event: "*", schema: "coffre", table: "document_types" }, fetchAll)
       .subscribe();
     return () => supabase.removeChannel(channel);
@@ -173,6 +227,11 @@ export default function CoffreApp({ session }) {
     contactTypes.forEach((t) => (map[t.id] = t));
     return map;
   }, [contactTypes]);
+  const activityById = useMemo(() => {
+    const map = {};
+    activities.forEach((a) => (map[a.id] = a));
+    return map;
+  }, [activities]);
   const documentTypeById = useMemo(() => {
     const map = {};
     documentTypes.forEach((t) => (map[t.id] = t));
@@ -187,8 +246,10 @@ export default function CoffreApp({ session }) {
   async function saveContact(fields, existingId) {
     const payload = {
       contact_type_id: fields.contactTypeId,
+      activity_id: fields.activityId || null,
       family_member_id: fields.familyMemberId || null,
       nom: fields.nom,
+      alias: fields.alias || "",
       prenom: fields.prenom,
       societe: fields.societe,
       telephone_mobile: fields.telephoneMobile,
@@ -218,9 +279,11 @@ export default function CoffreApp({ session }) {
   async function importContacts(rows) {
     let successCount = 0;
     const failures = [];
+    const generalActivityId = activities.find((a) => isGeneralName(a.name))?.id || null;
     for (const r of rows) {
       const payload = {
         contact_type_id: r.contactTypeId,
+        activity_id: generalActivityId,
         family_member_id: r.familyMemberId || null,
         nom: r.lastName,
         prenom: r.firstName,
@@ -293,9 +356,9 @@ export default function CoffreApp({ session }) {
     if (error) setErrorMsg("Impossible d'ajouter cet élément.");
     else fetchAll();
   }
-  async function addContactType(name, color) {
-    const { error } = await supabase.from("contact_types").insert({ name, color: color || "stone" });
-    if (error) setErrorMsg("Impossible d'ajouter ce type.");
+  async function addColoredRef(table, name, color) {
+    const { error } = await supabase.from(table).insert({ name, color: color || "stone" });
+    if (error) setErrorMsg("Impossible d'ajouter cet élément.");
     else fetchAll();
   }
   async function updateRef(table, id, name) {
@@ -309,8 +372,8 @@ export default function CoffreApp({ session }) {
     fetchAll();
     return true;
   }
-  async function updateContactTypeColor(id, color) {
-    const { error } = await supabase.from("contact_types").update({ color }).eq("id", id);
+  async function updateRefColor(table, id, color) {
+    const { error } = await supabase.from(table).update({ color }).eq("id", id);
     if (error) setErrorMsg("Impossible de modifier la couleur.");
     else fetchAll();
   }
@@ -323,7 +386,7 @@ export default function CoffreApp({ session }) {
     <div className="w-full min-h-screen bg-stone-50 font-sans text-stone-900 flex">
       <aside className="w-56 shrink-0 bg-stone-100 border-r border-stone-200 min-h-screen p-4 hidden sm:flex flex-col">
         <div className="mb-6 px-1 flex flex-col items-center text-center gap-2">
-          <img src="/icon-nav.png" alt="" width={80} height={80} className="rounded-2xl shrink-0" />
+          <img src="/icon.svg" alt="" width={80} height={80} className="shrink-0" />
           <div className="min-w-0">
             <p className="font-serif text-lg text-blue-950 leading-tight">Coffre numérique</p>
             <p className="text-xs text-stone-500 truncate">{session.user.email}</p>
@@ -401,9 +464,10 @@ export default function CoffreApp({ session }) {
           <ContactsTab
             contacts={contacts}
             contactTypes={contactTypes}
+            activities={activities}
             familyMembers={familyMembers}
             contactTypeById={contactTypeById}
-            familyMemberById={familyMemberById}
+            activityById={activityById}
             onSave={saveContact}
             onDelete={deleteContact}
           />
@@ -426,14 +490,15 @@ export default function CoffreApp({ session }) {
           <CoffreSettingsTab
             familyMembers={familyMembers}
             contactTypes={contactTypes}
+            activities={activities}
             documentTypes={documentTypes}
             contacts={contacts}
             documents={documents}
             onAddRef={addRef}
-            onAddContactType={addContactType}
+            onAddColoredRef={addColoredRef}
             onUpdateRef={updateRef}
             onRemoveRef={removeRef}
-            onUpdateContactTypeColor={updateContactTypeColor}
+            onUpdateRefColor={updateRefColor}
             onImportContacts={importContacts}
           />
         )}
@@ -448,6 +513,32 @@ function TypeBadge({ type }) {
   return <span className={`inline-block text-xs px-2 py-0.5 rounded-full border ${cls}`}>{type.name}</span>;
 }
 
+// Numéro au format international ; un clic (ou Entrée) le copie dans le presse-papiers.
+function PhoneCopy({ value }) {
+  const [copied, setCopied] = useState(false);
+  const intl = toInternationalPhone(value);
+  if (!intl) return null;
+  async function handleCopy(e) {
+    e.stopPropagation();
+    if (await copyToClipboard(intl)) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }
+  }
+  return (
+    <span
+      role="button"
+      tabIndex={0}
+      title="Cliquer pour copier le numéro"
+      onClick={handleCopy}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleCopy(e); } }}
+      className="cursor-pointer hover:text-blue-800 hover:underline"
+    >
+      {copied ? <span className="text-emerald-600 no-underline">Numéro copié ✓</span> : formatPhoneDisplay(value)}
+    </span>
+  );
+}
+
 function MemberBadge({ member }) {
   return (
     <span className="inline-block text-xs px-2 py-0.5 rounded-full border bg-stone-100 text-stone-600 border-stone-200">
@@ -458,9 +549,10 @@ function MemberBadge({ member }) {
 
 /* ---------------------------- Contacts ---------------------------- */
 
-function ContactsTab({ contacts, contactTypes, familyMembers, contactTypeById, familyMemberById, onSave, onDelete }) {
+function ContactsTab({ contacts, contactTypes, activities, familyMembers, contactTypeById, activityById, onSave, onDelete }) {
   const [search, setSearch] = useState("");
   const [filterType, setFilterType] = useState("");
+  const [filterActivity, setFilterActivity] = useState("");
   const [filterMember, setFilterMember] = useState("");
   const [editing, setEditing] = useState(null); // null = closed, {} = new, {...} = edit
   const [openId, setOpenId] = useState(null);
@@ -470,7 +562,9 @@ function ContactsTab({ contacts, contactTypes, familyMembers, contactTypeById, f
     onSave(
       {
         contactTypeId: c.contact_type_id,
+        activityId: c.activity_id,
         familyMemberId: c.family_member_id,
+        alias: c.alias,
         nom: c.nom,
         prenom: c.prenom,
         societe: c.societe,
@@ -493,16 +587,17 @@ function ContactsTab({ contacts, contactTypes, familyMembers, contactTypeById, f
     return contacts
       .filter((c) => {
         if (filterType && c.contact_type_id !== filterType) return false;
+        if (filterActivity && c.activity_id !== filterActivity) return false;
         if (filterMember === "__general__" && c.family_member_id) return false;
         if (filterMember && filterMember !== "__general__" && c.family_member_id !== filterMember) return false;
         if (!q) return true;
         const haystack = normalizeStr(
-          [c.nom, c.prenom, c.societe, c.email, c.telephone_mobile, c.telephone_fixe, c.ville].filter(Boolean).join(" ")
+          [c.nom, c.prenom, c.alias, c.societe, c.email, c.telephone_mobile, c.telephone_fixe, c.ville].filter(Boolean).join(" ")
         );
         return haystack.includes(q);
       })
       .sort((a, b) => contactSortKey(a).localeCompare(contactSortKey(b), "fr"));
-  }, [contacts, search, filterType, filterMember]);
+  }, [contacts, search, filterType, filterActivity, filterMember]);
 
   return (
     <div className="max-w-4xl mx-auto p-5 sm:p-8 space-y-5">
@@ -533,6 +628,10 @@ function ContactsTab({ contacts, contactTypes, familyMembers, contactTypeById, f
           <option value="">Tous les types</option>
           {contactTypes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
         </select>
+        <select value={filterActivity} onChange={(e) => setFilterActivity(e.target.value)} className="px-2.5 py-1.5 rounded-md border border-stone-300 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-800">
+          <option value="">Toutes les activités</option>
+          {activities.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+        </select>
         <select value={filterMember} onChange={(e) => setFilterMember(e.target.value)} className="px-2.5 py-1.5 rounded-md border border-stone-300 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-800">
           <option value="">Tous les membres</option>
           <option value="__general__">{GENERAL_LABEL}</option>
@@ -546,19 +645,27 @@ function ContactsTab({ contacts, contactTypes, familyMembers, contactTypeById, f
         )}
         {filtered.map((c) => {
           const isOpen = openId === c.id;
+          const type = contactTypeById[c.contact_type_id];
+          const activity = activityById[c.activity_id];
+          const showType = type && !isGeneralName(type.name);
+          const showActivity = activity && !isGeneralName(activity.name);
+          const mainPhone = c.telephone_mobile || c.telephone_fixe;
           return (
             <div key={c.id}>
-              <button
+              <div
+                role="button"
+                tabIndex={0}
                 onClick={() => setOpenId(isOpen ? null : c.id)}
-                className="w-full text-left px-4 py-3 flex items-center gap-3 hover:bg-stone-50"
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpenId(isOpen ? null : c.id); } }}
+                className="w-full text-left px-4 py-3 flex items-center gap-3 hover:bg-stone-50 cursor-pointer"
               >
                 <div className="w-9 h-9 rounded-full bg-blue-50 text-blue-900 flex items-center justify-center text-sm font-medium shrink-0">
                   {contactDisplayName(c).slice(0, 1).toUpperCase()}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-stone-800 truncate">{contactDisplayName(c)}</p>
+                  <p className="text-sm font-medium text-stone-800 truncate">{contactTitle(c)}</p>
                   <p className="text-xs text-stone-400 truncate">
-                    {[c.telephone_mobile || c.telephone_fixe, c.email].filter(Boolean).join(" · ") || "—"}
+                    {mainPhone ? <PhoneCopy value={mainPhone} /> : "—"}
                   </p>
                 </div>
                 <button
@@ -568,20 +675,24 @@ function ContactsTab({ contacts, contactTypes, familyMembers, contactTypeById, f
                 >
                   <Star size={17} fill={c.favori ? "currentColor" : "none"} />
                 </button>
-                <div className="hidden sm:flex items-center gap-1.5 shrink-0">
-                  <TypeBadge type={contactTypeById[c.contact_type_id]} />
-                  <MemberBadge member={familyMemberById[c.family_member_id]} />
-                </div>
-              </button>
+                {(showType || showActivity) && (
+                  <div className="hidden sm:flex items-center gap-1.5 shrink-0">
+                    {showType && <TypeBadge type={type} />}
+                    {showActivity && <TypeBadge type={activity} />}
+                  </div>
+                )}
+              </div>
               {isOpen && (
                 <div className="px-4 pb-4 pt-1 bg-stone-50 border-t border-stone-100 space-y-2">
-                  <div className="flex sm:hidden gap-1.5 flex-wrap">
-                    <TypeBadge type={contactTypeById[c.contact_type_id]} />
-                    <MemberBadge member={familyMemberById[c.family_member_id]} />
-                  </div>
+                  {(showType || showActivity) && (
+                    <div className="flex sm:hidden gap-1.5 flex-wrap">
+                      {showType && <TypeBadge type={type} />}
+                      {showActivity && <TypeBadge type={activity} />}
+                    </div>
+                  )}
                   <div className="grid sm:grid-cols-2 gap-x-6 gap-y-1.5 text-sm text-stone-600">
-                    {c.telephone_mobile && <p className="flex items-center gap-1.5"><Phone size={13} className="text-stone-400" /> {c.telephone_mobile} <span className="text-stone-400">(mobile)</span></p>}
-                    {c.telephone_fixe && <p className="flex items-center gap-1.5"><Phone size={13} className="text-stone-400" /> {c.telephone_fixe} <span className="text-stone-400">(fixe)</span></p>}
+                    {c.telephone_mobile && <p className="flex items-center gap-1.5"><Phone size={13} className="text-stone-400" /> <PhoneCopy value={c.telephone_mobile} /> <span className="text-stone-400">(mobile)</span></p>}
+                    {c.telephone_fixe && <p className="flex items-center gap-1.5"><Phone size={13} className="text-stone-400" /> <PhoneCopy value={c.telephone_fixe} /> <span className="text-stone-400">(fixe)</span></p>}
                     {c.email && <p className="flex items-center gap-1.5"><Mail size={13} className="text-stone-400" /> {c.email}</p>}
                     {(c.adresse || c.ville) && <p className="flex items-center gap-1.5"><MapPin size={13} className="text-stone-400" /> {[c.adresse, c.code_postal, c.ville].filter(Boolean).join(" ")}</p>}
                     {c.date_naissance && <p className="flex items-center gap-1.5"><Cake size={13} className="text-stone-400" /> Né(e) le {formatDateFR(c.date_naissance)}</p>}
@@ -602,6 +713,7 @@ function ContactsTab({ contacts, contactTypes, familyMembers, contactTypeById, f
         <ContactEditor
           contact={editing}
           contactTypes={contactTypes}
+          activities={activities}
           familyMembers={familyMembers}
           onCancel={() => setEditing(null)}
           onSave={async (fields) => {
@@ -615,8 +727,13 @@ function ContactsTab({ contacts, contactTypes, familyMembers, contactTypeById, f
   );
 }
 
-function ContactEditor({ contact, contactTypes, familyMembers, onSave, onCancel, onDelete }) {
+function ContactEditor({ contact, contactTypes, activities, familyMembers, onSave, onCancel, onDelete }) {
   const [contactTypeId, setContactTypeId] = useState(contact.contact_type_id || contactTypes[0]?.id || "");
+  // Nouveau contact : activité "Général" par défaut (si elle existe) ; contact existant : sa valeur.
+  const [activityId, setActivityId] = useState(
+    contact.id ? contact.activity_id || "" : activities.find((a) => isGeneralName(a.name))?.id || ""
+  );
+  const [alias, setAlias] = useState(contact.alias || "");
   const [familyMemberId, setFamilyMemberId] = useState(contact.family_member_id || "");
   const [nom, setNom] = useState(contact.nom || "");
   const [prenom, setPrenom] = useState(contact.prenom || "");
@@ -658,11 +775,22 @@ function ContactEditor({ contact, contactTypes, familyMembers, onSave, onCancel,
             </select>
           </div>
           <div>
+            <label className="text-xs text-stone-500 block mb-1">Activité</label>
+            <select value={activityId} onChange={(e) => setActivityId(e.target.value)} className="w-full px-2.5 py-1.5 rounded-md border border-stone-300 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-800">
+              <option value="">—</option>
+              {activities.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+            </select>
+          </div>
+          <div>
             <label className="text-xs text-stone-500 block mb-1">Concerne</label>
             <select value={familyMemberId} onChange={(e) => setFamilyMemberId(e.target.value)} className="w-full px-2.5 py-1.5 rounded-md border border-stone-300 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-800">
               <option value="">{GENERAL_LABEL}</option>
               {familyMembers.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
             </select>
+          </div>
+          <div>
+            <label className="text-xs text-stone-500 block mb-1">Alias</label>
+            <input value={alias} onChange={(e) => setAlias(e.target.value)} placeholder="Surnom, nom d'usage…" className="w-full px-2.5 py-1.5 rounded-md border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-800" />
           </div>
           <div>
             <label className="text-xs text-stone-500 block mb-1">Nom</label>
@@ -724,7 +852,7 @@ function ContactEditor({ contact, contactTypes, familyMembers, onSave, onCancel,
                 if (!nom.trim() && !societe.trim()) { setError("Entrez au moins un nom ou une société."); return; }
                 if (!contactTypeId) { setError("Choisissez un type de contact."); return; }
                 onSave({
-                  contactTypeId, familyMemberId, nom: nom.trim(), prenom: prenom.trim(), societe: societe.trim(),
+                  contactTypeId, activityId, familyMemberId, alias: alias.trim(), nom: nom.trim(), prenom: prenom.trim(), societe: societe.trim(),
                   telephoneMobile: telephoneMobile.trim(), telephoneFixe: telephoneFixe.trim(), email: email.trim(),
                   adresse: adresse.trim(), codePostal: codePostal.trim(), ville: ville.trim(), dateNaissance, notes: notes.trim(), favori,
                 });
@@ -1178,12 +1306,12 @@ function ImportContactsPanel({ contactTypes, familyMembers, onImportContacts }) 
   );
 }
 
-function CoffreSettingsTab({ familyMembers, contactTypes, documentTypes, contacts, documents, onAddRef, onAddContactType, onUpdateRef, onRemoveRef, onUpdateContactTypeColor, onImportContacts }) {
+function CoffreSettingsTab({ familyMembers, contactTypes, activities, documentTypes, contacts, documents, onAddRef, onAddColoredRef, onUpdateRef, onRemoveRef, onUpdateRefColor, onImportContacts }) {
   return (
     <div className="max-w-3xl mx-auto p-5 sm:p-8 space-y-6">
       <div>
         <h1 className="font-serif text-2xl text-stone-700 tracking-tight">Paramétrage</h1>
-        <p className="text-stone-500 text-sm mt-1">Membres de la famille, types de contact, types de document, et import.</p>
+        <p className="text-stone-500 text-sm mt-1">Membres de la famille, types de contact, activités, types de document, et import.</p>
       </div>
 
       <RefListEditor
@@ -1199,14 +1327,27 @@ function CoffreSettingsTab({ familyMembers, contactTypes, documentTypes, contact
 
       <RefListEditor
         title="Types de contact"
-        description="Ex : Personnel, Travail, Société, Artisan…"
+        description="Ex : Personnel, Travail, Société, Artisan… (« Général » n'est pas affiché sur la ligne du contact)"
         items={contactTypes}
         placeholder="Nom du type"
         withColor
-        onAdd={(name, color) => onAddContactType(name, color)}
+        onAdd={(name, color) => onAddColoredRef("contact_types", name, color)}
         onUpdate={(id, name) => onUpdateRef("contact_types", id, name)}
-        onUpdateColor={onUpdateContactTypeColor}
+        onUpdateColor={(id, color) => onUpdateRefColor("contact_types", id, color)}
         onRemove={(id) => onRemoveRef("contact_types", id)}
+        blockedMessage={(name) => `« ${name} » est utilisé par des contacts : réaffectez-les avant de le supprimer.`}
+      />
+
+      <RefListEditor
+        title="Activités"
+        description="Ex : Général, Plombier, Médecin, Électricien… Sert à filtrer les contacts (« Général » n'est pas affiché sur la ligne du contact)."
+        items={activities}
+        placeholder="Nom de l'activité"
+        withColor
+        onAdd={(name, color) => onAddColoredRef("activities", name, color)}
+        onUpdate={(id, name) => onUpdateRef("activities", id, name)}
+        onUpdateColor={(id, color) => onUpdateRefColor("activities", id, color)}
+        onRemove={(id) => onRemoveRef("activities", id)}
         blockedMessage={(name) => `« ${name} » est utilisé par des contacts : réaffectez-les avant de le supprimer.`}
       />
 
