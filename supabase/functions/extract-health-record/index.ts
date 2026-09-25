@@ -101,15 +101,32 @@ Deno.serve(async (req: Request) => {
     },
   };
 
+  // Garde-fou : la limite de temps d'inactivité des Edge Functions Supabase
+  // est de 150s (au-delà, la plateforme coupe la connexion sans réponse
+  // propre, ce que le navigateur voit comme "Failed to send a request").
+  // On abandonne l'appel à Gemini avant cette limite pour renvoyer un
+  // message clair plutôt que de laisser la plateforme couper sans explication.
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 120_000);
+
   let geminiRes: Response;
   try {
     geminiRes = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
+      signal: controller.signal,
     });
   } catch (e) {
+    if ((e as { name?: string })?.name === "AbortError") {
+      return jsonResponse(
+        { error: "L'analyse a pris trop de temps (plus de 2 minutes). Essayez avec moins de pages à la fois, ou une photo plutôt qu'un PDF complet." },
+        504
+      );
+    }
     return jsonResponse({ error: "Impossible de contacter l'API Gemini." }, 502);
+  } finally {
+    clearTimeout(timeout);
   }
 
   if (!geminiRes.ok) {
