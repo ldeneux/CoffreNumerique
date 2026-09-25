@@ -21,6 +21,9 @@ import {
   AlertTriangle,
   UploadCloud,
   Star,
+  Pin,
+  Syringe,
+  Loader2,
   CalendarDays,
   CheckSquare,
   Square,
@@ -35,6 +38,16 @@ const GENERAL_LABEL = "Général";
 // que Tailwind les détecte à la compilation (jamais de bg-${x}-500 dynamique,
 // qui ne génère aucune classe et rend des badges invisibles).
 const PALETTE = ["blue", "emerald", "rose", "amber", "violet", "teal", "fuchsia", "cyan", "indigo", "stone"];
+
+// Emoji des membres de la famille : une base de silhouettes, complétée par le
+// choix demandé (animaux, fantaisie...) réservé aux membres de la famille.
+const FAMILY_EMOJI_BASE = ["\u{1F464}", "\u{1F9D1}", "\u{1F468}", "\u{1F469}", "\u{1F9D2}", "\u{1F466}", "\u{1F467}", "\u{1F476}", "\u{1F474}", "\u{1F475}"];
+const FAMILY_EMOJI_EXTRA = ["\u{1F98A}", "\u{1F43C}", "\u{1F984}", "\u{1F99C}", "\u{1F426}\u200D\u{1F525}", "\u{1F438}", "\u{1F420}", "\u{1F98B}", "\u{1F99A}", "\u{1F430}", "\u{1F333}", "\u{1F33A}", "\u{1F36C}", "\u{1F370}", "\u{1F9D1}\u200D\u{1F680}", "\u{1FA90}", "\u{1F349}", "\u{1F525}", "\u{1F9D9}\u200D\u2640\uFE0F", "\u{1F52E}", "\u{1F428}", "\u{1F41E}", "\u{1F344}", "\u{1F308}", "\u{1F496}", "\u2728", "\u{1F31F}", "\u{1F9C1}", "\u{1F353}", "\u{1F4AB}"];
+const FAMILY_EMOJI_OPTIONS = [...FAMILY_EMOJI_BASE, ...FAMILY_EMOJI_EXTRA];
+
+// Emoji des types de document : un jeu adapté aux pièces administratives
+// courantes (identité, véhicule, logement, banque, santé...).
+const DOCUMENT_EMOJI_OPTIONS = ["\u{1FAAA}", "\u{1F697}", "\u{1F698}", "\u{1F3E0}", "\u{1F4DC}", "\u{1F4CB}", "\u{1F393}", "\u{1F9FE}", "\u{1F3E6}", "\u271D\uFE0F", "\u{1F489}", "\u{1F4B6}", "\u{1F6C2}", "\u{1F4C4}", "\u{1F4C1}", "\u{1F5C2}\uFE0F", "\u{1F4D1}", "\u{1F3E5}", "\u2696\uFE0F", "\u{1F3AB}"];
 const SWATCH_BG = {
   blue: "bg-blue-500",
   emerald: "bg-emerald-500",
@@ -83,6 +96,16 @@ function contactTitle(c) {
 // "Général" (type de contact ou activité) : valeur par défaut, jamais affichée en badge.
 function isGeneralName(name) {
   return normalizeStr(name) === normalizeStr(GENERAL_LABEL);
+}
+// Nom d'un membre de la famille précédé de son emoji, si renseigné.
+function memberLabel(member) {
+  if (!member) return GENERAL_LABEL;
+  return member.emoji ? `${member.emoji} ${member.name}` : member.name;
+}
+// Nom d'un type (document...) précédé de son emoji, si renseigné.
+function typeLabel(type) {
+  if (!type) return "—";
+  return type.emoji ? `${type.emoji} ${type.name}` : type.name;
 }
 
 // Téléphone au format international compact (+33612345678), utilisé pour la copie.
@@ -166,6 +189,7 @@ const NAV_ITEMS = [
   { key: "events", label: "Événements", icon: CalendarDays },
   { key: "contacts", label: "Contacts", icon: Users },
   { key: "documents", label: "Documents", icon: FolderOpen },
+  { key: "sante", label: "Santé", icon: Syringe },
 ];
 
 export default function CoffreApp({ session }) {
@@ -176,18 +200,20 @@ export default function CoffreApp({ session }) {
   const [documentTypes, setDocumentTypes] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [documents, setDocuments] = useState([]);
+  const [vaccinations, setVaccinations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
 
   const fetchAll = useCallback(async () => {
     try {
-      const [{ data: fm }, { data: ct }, { data: ac }, { data: dt }, { data: cs }, { data: docs }] = await Promise.all([
+      const [{ data: fm }, { data: ct }, { data: ac }, { data: dt }, { data: cs }, { data: docs }, { data: vx }] = await Promise.all([
         supabase.from("family_members").select("*").order("name", { ascending: true }),
         supabase.from("contact_types").select("*").order("name", { ascending: true }),
         supabase.from("activities").select("*").order("name", { ascending: true }),
         supabase.from("document_types").select("*").order("name", { ascending: true }),
         supabase.from("contacts").select("*"),
         supabase.from("documents").select("*"),
+        supabase.from("vaccinations").select("*"),
       ]);
       setFamilyMembers(fm || []);
       setContactTypes(ct || []);
@@ -195,6 +221,7 @@ export default function CoffreApp({ session }) {
       setDocumentTypes(dt || []);
       setContacts(cs || []);
       setDocuments(docs || []);
+      setVaccinations(vx || []);
       setErrorMsg("");
     } catch (e) {
       setErrorMsg("Impossible de charger les données. Vérifiez votre connexion.");
@@ -209,6 +236,7 @@ export default function CoffreApp({ session }) {
       .channel("coffre-changes")
       .on("postgres_changes", { event: "*", schema: "coffre", table: "contacts" }, fetchAll)
       .on("postgres_changes", { event: "*", schema: "coffre", table: "documents" }, fetchAll)
+      .on("postgres_changes", { event: "*", schema: "coffre", table: "vaccinations" }, fetchAll)
       .on("postgres_changes", { event: "*", schema: "coffre", table: "family_members" }, fetchAll)
       .on("postgres_changes", { event: "*", schema: "coffre", table: "contact_types" }, fetchAll)
       .on("postgres_changes", { event: "*", schema: "coffre", table: "activities" }, fetchAll)
@@ -237,6 +265,14 @@ export default function CoffreApp({ session }) {
     documentTypes.forEach((t) => (map[t.id] = t));
     return map;
   }, [documentTypes]);
+  const emergencyContacts = useMemo(
+    () => contacts.filter((c) => c.numero_urgence).sort((a, b) => contactSortKey(a).localeCompare(contactSortKey(b), "fr")),
+    [contacts]
+  );
+  const pinnedContacts = useMemo(
+    () => contacts.filter((c) => c.epingle).sort((a, b) => contactSortKey(a).localeCompare(contactSortKey(b), "fr")),
+    [contacts]
+  );
 
   if (loading) {
     return <div className="w-full min-h-screen flex items-center justify-center text-stone-400 text-sm font-sans">Chargement du coffre numérique…</div>;
@@ -250,6 +286,8 @@ export default function CoffreApp({ session }) {
       family_member_id: fields.familyMemberId || null,
       nom: fields.nom,
       alias: fields.alias || "",
+      numero_urgence: !!fields.numeroUrgence,
+      epingle: !!fields.epingle,
       prenom: fields.prenom,
       societe: fields.societe,
       telephone_mobile: fields.telephoneMobile,
@@ -343,6 +381,67 @@ export default function CoffreApp({ session }) {
     if (error) setErrorMsg("Impossible de supprimer ce document.");
     else fetchAll();
   }
+  // --- Carnet de santé ---
+  async function saveVaccination(fields, existingId) {
+    const payload = {
+      family_member_id: fields.familyMemberId,
+      vaccine_name: fields.vaccineName,
+      date_administered: fields.dateAdministered || null,
+      lot_number: fields.lotNumber || "",
+      dose_label: fields.doseLabel || "",
+      source_document_id: fields.sourceDocumentId || null,
+      notes: fields.notes || "",
+    };
+    const { error } = existingId
+      ? await supabase.from("vaccinations").update(payload).eq("id", existingId)
+      : await supabase.from("vaccinations").insert(payload);
+    if (error) { setErrorMsg("Impossible d'enregistrer cette vaccination."); return false; }
+    fetchAll();
+    return true;
+  }
+  async function deleteVaccination(id) {
+    const { error } = await supabase.from("vaccinations").delete().eq("id", id);
+    if (error) setErrorMsg("Impossible de supprimer cette entrée.");
+    else fetchAll();
+  }
+  // Enregistrement groupé après relecture par l'utilisateur des lignes extraites
+  // d'un scan de carnet de santé (voir extract-health-record). Rien n'est
+  // jamais inséré avant cette validation manuelle.
+  async function importVaccinations(familyMemberId, rows, sourceDocumentId) {
+    let successCount = 0;
+    for (const r of rows) {
+      const payload = {
+        family_member_id: familyMemberId,
+        vaccine_name: r.vaccineName,
+        date_administered: r.dateAdministered || null,
+        lot_number: r.lotNumber || "",
+        dose_label: r.doseLabel || "",
+        source_document_id: sourceDocumentId || null,
+        notes: r.notes || "",
+      };
+      const { error } = await supabase.from("vaccinations").insert(payload);
+      if (!error) successCount++;
+    }
+    fetchAll();
+    return successCount;
+  }
+  // Appelle la fonction Supabase Edge "extract-health-record" (voir
+  // supabase/functions/extract-health-record) qui elle-même appelle l'API
+  // Gemini. Nécessite que la clé GEMINI_API_KEY soit configurée côté Supabase
+  // (voir README) : sans ça, cet appel renvoie une erreur claire.
+  async function extractHealthRecord(base64, mimeType) {
+    const { data, error } = await supabase.functions.invoke("extract-health-record", {
+      body: { base64, mimeType },
+    });
+    if (error) {
+      let detail = error.message || "";
+      try { const body = await error.context?.json?.(); if (body?.error) detail = body.error; } catch (e) { /* ignore */ }
+      throw new Error(detail || "La lecture automatique du scan a échoué.");
+    }
+    if (!data?.entries) throw new Error("Réponse inattendue de l'extraction.");
+    return data.entries;
+  }
+
   async function downloadDocument(doc) {
     if (!doc.file_path) return;
     const { data, error } = await supabase.storage.from(DOCUMENTS_BUCKET).createSignedUrl(doc.file_path, 120);
@@ -351,9 +450,15 @@ export default function CoffreApp({ session }) {
   }
 
   // --- Paramétrage : listes de référence ---
-  async function addRef(table, name) {
-    const { error } = await supabase.from(table).insert({ name });
+  async function addRef(table, name, emoji) {
+    const payload = emoji !== undefined ? { name, emoji: emoji || null } : { name };
+    const { error } = await supabase.from(table).insert(payload);
     if (error) setErrorMsg("Impossible d'ajouter cet élément.");
+    else fetchAll();
+  }
+  async function updateRefEmoji(table, id, emoji) {
+    const { error } = await supabase.from(table).update({ emoji: emoji || null }).eq("id", id);
+    if (error) setErrorMsg("Impossible de modifier l'emoji.");
     else fetchAll();
   }
   async function addColoredRef(table, name, color) {
@@ -392,7 +497,7 @@ export default function CoffreApp({ session }) {
             <p className="text-xs text-stone-500 truncate">{session.user.email}</p>
           </div>
         </div>
-        <nav className="space-y-1 flex-1">
+        <nav className="space-y-1">
           {NAV_ITEMS.map((item) => {
             const Icon = item.icon;
             const active = activeTab === item.key;
@@ -420,7 +525,11 @@ export default function CoffreApp({ session }) {
             </button>
           </div>
         </nav>
-        <button onClick={logout} className="flex items-center gap-2 text-sm text-stone-500 px-3 py-2 rounded-md hover:bg-stone-200">
+        <div className="flex-1 min-h-0 overflow-y-auto -mx-1 px-1 mt-1">
+          <QuickDialSection title="Numéros d'urgence" icon={AlertTriangle} contacts={emergencyContacts} accent="text-rose-500" />
+          <QuickDialSection title="Contacts épinglés" icon={Pin} contacts={pinnedContacts} accent="text-blue-800" />
+        </div>
+        <button onClick={logout} className="flex items-center gap-2 text-sm text-stone-500 px-3 py-2 rounded-md hover:bg-stone-200 shrink-0">
           <LogOut size={16} /> Déconnexion
         </button>
       </aside>
@@ -447,6 +556,13 @@ export default function CoffreApp({ session }) {
           <div className="m-5 sm:m-8 sm:mb-0 text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-md px-3 py-2 flex items-start justify-between gap-3">
             <span>{errorMsg}</span>
             <button onClick={() => setErrorMsg("")} className="text-rose-400 hover:text-rose-600 shrink-0"><X size={14} /></button>
+          </div>
+        )}
+
+        {(emergencyContacts.length > 0 || pinnedContacts.length > 0) && (
+          <div className="sm:hidden m-5 mb-0 bg-white rounded-lg border border-stone-200 p-3">
+            <QuickDialSection title="Numéros d'urgence" icon={AlertTriangle} contacts={emergencyContacts} accent="text-rose-500" />
+            <QuickDialSection title="Contacts épinglés" icon={Pin} contacts={pinnedContacts} accent="text-blue-800" />
           </div>
         )}
 
@@ -486,6 +602,20 @@ export default function CoffreApp({ session }) {
           />
         )}
 
+        {activeTab === "sante" && (
+          <HealthTab
+            familyMembers={familyMembers}
+            vaccinations={vaccinations}
+            documents={documents}
+            documentTypes={documentTypes}
+            onSaveVaccination={saveVaccination}
+            onDeleteVaccination={deleteVaccination}
+            onImportVaccinations={importVaccinations}
+            onExtractHealthRecord={extractHealthRecord}
+            onSaveDocument={saveDocument}
+          />
+        )}
+
         {activeTab === "settings" && (
           <CoffreSettingsTab
             familyMembers={familyMembers}
@@ -499,6 +629,7 @@ export default function CoffreApp({ session }) {
             onUpdateRef={updateRef}
             onRemoveRef={removeRef}
             onUpdateRefColor={updateRefColor}
+            onUpdateRefEmoji={updateRefEmoji}
             onImportContacts={importContacts}
           />
         )}
@@ -539,10 +670,70 @@ function PhoneCopy({ value }) {
   );
 }
 
+// Ligne "numéro d'urgence" / "contact épinglé" : affiche le nom, révèle le
+// numéro (et le copie) au clic, puis revient au nom au bout de 5 secondes.
+function QuickDialItem({ contact }) {
+  const [revealed, setRevealed] = useState(false);
+  const timerRef = useRef(null);
+  useEffect(() => () => clearTimeout(timerRef.current), []);
+  const phone = contact.telephone_mobile || contact.telephone_fixe;
+
+  async function handleClick() {
+    if (!phone) return;
+    await copyToClipboard(toInternationalPhone(phone));
+    setRevealed(true);
+    clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => setRevealed(false), 5000);
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      disabled={!phone}
+      title={phone ? "Cliquer pour copier le numéro" : "Aucun téléphone enregistré"}
+      className={`w-full flex items-center justify-between gap-2 text-left text-xs px-2 py-1.5 rounded-md ${
+        phone ? "text-stone-600 hover:bg-stone-200" : "text-stone-300 cursor-default"
+      }`}
+    >
+      <span className="truncate">{revealed ? formatPhoneDisplay(phone) : contactDisplayName(contact)}</span>
+      {revealed && <Check size={13} className="text-emerald-600 shrink-0" />}
+    </button>
+  );
+}
+function QuickDialSection({ title, icon: Icon, contacts, accent }) {
+  if (contacts.length === 0) return null;
+  return (
+    <div className="mb-2">
+      <p className={`px-2 mb-1 text-[11px] font-medium uppercase tracking-wide text-stone-400 flex items-center gap-1.5`}>
+        <Icon size={12} className={accent} /> {title}
+      </p>
+      <div>
+        {contacts.map((c) => <QuickDialItem key={c.id} contact={c} />)}
+      </div>
+    </div>
+  );
+}
+
+// Lit un fichier (image/PDF) et renvoie son contenu en base64 (sans le
+// préfixe data:...;base64, retiré) pour l'envoyer à la fonction d'extraction.
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || "");
+      const commaIdx = result.indexOf(",");
+      resolve(commaIdx >= 0 ? result.slice(commaIdx + 1) : result);
+    };
+    reader.onerror = () => reject(reader.error || new Error("Lecture du fichier impossible."));
+    reader.readAsDataURL(file);
+  });
+}
+
 function MemberBadge({ member }) {
   return (
     <span className="inline-block text-xs px-2 py-0.5 rounded-full border bg-stone-100 text-stone-600 border-stone-200">
-      {member ? member.name : GENERAL_LABEL}
+      {memberLabel(member)}
     </span>
   );
 }
@@ -557,29 +748,41 @@ function ContactsTab({ contacts, contactTypes, activities, familyMembers, contac
   const [editing, setEditing] = useState(null); // null = closed, {} = new, {...} = edit
   const [openId, setOpenId] = useState(null);
 
+  // Base commune pour les bascules rapides (favori / urgence / épinglé) :
+  // on repart de la fiche telle quelle et on ne change que le champ visé.
+  function baseFieldsFrom(c) {
+    return {
+      contactTypeId: c.contact_type_id,
+      activityId: c.activity_id,
+      familyMemberId: c.family_member_id,
+      alias: c.alias,
+      nom: c.nom,
+      prenom: c.prenom,
+      societe: c.societe,
+      telephoneMobile: c.telephone_mobile,
+      telephoneFixe: c.telephone_fixe,
+      email: c.email,
+      adresse: c.adresse,
+      codePostal: c.code_postal,
+      ville: c.ville,
+      dateNaissance: c.date_naissance,
+      notes: c.notes,
+      favori: c.favori,
+      numeroUrgence: c.numero_urgence,
+      epingle: c.epingle,
+    };
+  }
   function toggleFavori(c, e) {
     e.stopPropagation();
-    onSave(
-      {
-        contactTypeId: c.contact_type_id,
-        activityId: c.activity_id,
-        familyMemberId: c.family_member_id,
-        alias: c.alias,
-        nom: c.nom,
-        prenom: c.prenom,
-        societe: c.societe,
-        telephoneMobile: c.telephone_mobile,
-        telephoneFixe: c.telephone_fixe,
-        email: c.email,
-        adresse: c.adresse,
-        codePostal: c.code_postal,
-        ville: c.ville,
-        dateNaissance: c.date_naissance,
-        notes: c.notes,
-        favori: !c.favori,
-      },
-      c.id
-    );
+    onSave({ ...baseFieldsFrom(c), favori: !c.favori }, c.id);
+  }
+  function toggleUrgence(c, e) {
+    e.stopPropagation();
+    onSave({ ...baseFieldsFrom(c), numeroUrgence: !c.numero_urgence }, c.id);
+  }
+  function toggleEpingle(c, e) {
+    e.stopPropagation();
+    onSave({ ...baseFieldsFrom(c), epingle: !c.epingle }, c.id);
   }
 
   const filtered = useMemo(() => {
@@ -635,7 +838,7 @@ function ContactsTab({ contacts, contactTypes, activities, familyMembers, contac
         <select value={filterMember} onChange={(e) => setFilterMember(e.target.value)} className="px-2.5 py-1.5 rounded-md border border-stone-300 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-800">
           <option value="">Tous les membres</option>
           <option value="__general__">{GENERAL_LABEL}</option>
-          {familyMembers.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+          {familyMembers.map((m) => <option key={m.id} value={m.id}>{memberLabel(m)}</option>)}
         </select>
       </div>
 
@@ -668,6 +871,20 @@ function ContactsTab({ contacts, contactTypes, activities, familyMembers, contac
                     {mainPhone ? <PhoneCopy value={mainPhone} /> : "—"}
                   </p>
                 </div>
+                <button
+                  onClick={(e) => toggleUrgence(c, e)}
+                  title={c.numero_urgence ? "Retirer des numéros d'urgence" : "Marquer comme numéro d'urgence"}
+                  className="shrink-0 text-rose-400 hover:text-rose-500"
+                >
+                  <AlertTriangle size={17} fill={c.numero_urgence ? "currentColor" : "none"} />
+                </button>
+                <button
+                  onClick={(e) => toggleEpingle(c, e)}
+                  title={c.epingle ? "Désépingler" : "Épingler"}
+                  className="shrink-0 text-blue-800 hover:text-blue-900"
+                >
+                  <Pin size={17} fill={c.epingle ? "currentColor" : "none"} />
+                </button>
                 <button
                   onClick={(e) => toggleFavori(c, e)}
                   title={c.favori ? "Retirer des favoris" : "Marquer en favori"}
@@ -747,6 +964,8 @@ function ContactEditor({ contact, contactTypes, activities, familyMembers, onSav
   const [dateNaissance, setDateNaissance] = useState(contact.date_naissance || "");
   const [notes, setNotes] = useState(contact.notes || "");
   const [favori, setFavori] = useState(!!contact.favori);
+  const [numeroUrgence, setNumeroUrgence] = useState(!!contact.numero_urgence);
+  const [epingle, setEpingle] = useState(!!contact.epingle);
   const [error, setError] = useState("");
 
   return (
@@ -755,6 +974,22 @@ function ContactEditor({ contact, contactTypes, activities, familyMembers, onSav
         <div className="flex items-center justify-between">
           <h3 className="font-serif text-lg text-stone-800">{contact.id ? "Modifier le contact" : "Nouveau contact"}</h3>
           <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setNumeroUrgence((v) => !v)}
+              title={numeroUrgence ? "Retirer des numéros d'urgence" : "Marquer comme numéro d'urgence"}
+              className="text-rose-400 hover:text-rose-500"
+            >
+              <AlertTriangle size={19} fill={numeroUrgence ? "currentColor" : "none"} />
+            </button>
+            <button
+              type="button"
+              onClick={() => setEpingle((v) => !v)}
+              title={epingle ? "Désépingler" : "Épingler"}
+              className="text-blue-800 hover:text-blue-900"
+            >
+              <Pin size={19} fill={epingle ? "currentColor" : "none"} />
+            </button>
             <button
               type="button"
               onClick={() => setFavori((f) => !f)}
@@ -785,7 +1020,7 @@ function ContactEditor({ contact, contactTypes, activities, familyMembers, onSav
             <label className="text-xs text-stone-500 block mb-1">Concerne</label>
             <select value={familyMemberId} onChange={(e) => setFamilyMemberId(e.target.value)} className="w-full px-2.5 py-1.5 rounded-md border border-stone-300 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-800">
               <option value="">{GENERAL_LABEL}</option>
-              {familyMembers.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+              {familyMembers.map((m) => <option key={m.id} value={m.id}>{memberLabel(m)}</option>)}
             </select>
           </div>
           <div>
@@ -855,6 +1090,7 @@ function ContactEditor({ contact, contactTypes, activities, familyMembers, onSav
                   contactTypeId, activityId, familyMemberId, alias: alias.trim(), nom: nom.trim(), prenom: prenom.trim(), societe: societe.trim(),
                   telephoneMobile: telephoneMobile.trim(), telephoneFixe: telephoneFixe.trim(), email: email.trim(),
                   adresse: adresse.trim(), codePostal: codePostal.trim(), ville: ville.trim(), dateNaissance, notes: notes.trim(), favori,
+                  numeroUrgence, epingle,
                 });
               }}
               className="px-3 py-1.5 text-sm rounded-md bg-blue-950 text-white hover:bg-blue-900"
@@ -904,12 +1140,12 @@ function DocumentsTab({ documents, documentTypes, familyMembers, documentTypeByI
       <div className="bg-white rounded-lg border border-stone-200 p-3 flex flex-wrap gap-2 items-center">
         <select value={filterType} onChange={(e) => setFilterType(e.target.value)} className="px-2.5 py-1.5 rounded-md border border-stone-300 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-800">
           <option value="">Tous les types</option>
-          {documentTypes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+          {documentTypes.map((t) => <option key={t.id} value={t.id}>{typeLabel(t)}</option>)}
         </select>
         <select value={filterMember} onChange={(e) => setFilterMember(e.target.value)} className="px-2.5 py-1.5 rounded-md border border-stone-300 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-800">
           <option value="">Tous les membres</option>
           <option value="__general__">{GENERAL_LABEL}</option>
-          {familyMembers.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+          {familyMembers.map((m) => <option key={m.id} value={m.id}>{memberLabel(m)}</option>)}
         </select>
       </div>
 
@@ -921,15 +1157,16 @@ function DocumentsTab({ documents, documentTypes, familyMembers, documentTypeByI
           const remaining = daysUntil(d.date_fin_validite);
           const expiring = remaining !== null && remaining <= 30;
           const expired = remaining !== null && remaining < 0;
+          const docType = documentTypeById[d.document_type_id];
           return (
             <div key={d.id} className="px-4 py-3 flex items-center gap-3 hover:bg-stone-50">
               <div className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 ${expired ? "bg-rose-50 text-rose-600" : expiring ? "bg-amber-50 text-amber-600" : "bg-blue-50 text-blue-900"}`}>
-                {fileExtIcon()}
+                {docType?.emoji ? <span className="text-base leading-none">{docType.emoji}</span> : fileExtIcon()}
               </div>
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-medium text-stone-800 truncate">{d.libelle}</p>
                 <p className="text-xs text-stone-400 truncate">
-                  {documentTypeById[d.document_type_id]?.name || "—"}
+                  {typeLabel(docType)}
                   {d.date_fin_validite && (
                     <>
                       {" · "}
@@ -999,14 +1236,14 @@ function DocumentEditor({ doc, documentTypes, familyMembers, onSave, onCancel, o
           <div>
             <label className="text-xs text-stone-500 block mb-1">Type de document</label>
             <select value={documentTypeId} onChange={(e) => setDocumentTypeId(e.target.value)} className="w-full px-2.5 py-1.5 rounded-md border border-stone-300 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-800">
-              {documentTypes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              {documentTypes.map((t) => <option key={t.id} value={t.id}>{typeLabel(t)}</option>)}
             </select>
           </div>
           <div>
             <label className="text-xs text-stone-500 block mb-1">Concerne</label>
             <select value={familyMemberId} onChange={(e) => setFamilyMemberId(e.target.value)} className="w-full px-2.5 py-1.5 rounded-md border border-stone-300 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-800">
               <option value="">{GENERAL_LABEL}</option>
-              {familyMembers.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+              {familyMembers.map((m) => <option key={m.id} value={m.id}>{memberLabel(m)}</option>)}
             </select>
           </div>
           <div className="sm:col-span-2">
@@ -1085,9 +1322,55 @@ function ColorPicker({ value, onChange }) {
   );
 }
 
-function RefListEditor({ title, description, items, placeholder, withColor, onAdd, onUpdate, onUpdateColor, onRemove, blockedMessage }) {
+// Petit sélecteur d'emoji en popover : un bouton qui affiche l'emoji choisi
+// (ou un tiret), et ouvre une grille au clic. "options" est la liste des
+// emojis proposés (différente pour les membres de la famille et les types de
+// document, voir FAMILY_EMOJI_OPTIONS / DOCUMENT_EMOJI_OPTIONS).
+function EmojiPicker({ value, onChange, options }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative shrink-0">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        title="Choisir un emoji"
+        className="w-8 h-8 rounded-md border border-stone-300 flex items-center justify-center text-base bg-white hover:bg-stone-50"
+      >
+        {value || <span className="text-stone-300 text-xs">—</span>}
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-20" onClick={() => setOpen(false)} />
+          <div className="absolute z-30 mt-1 left-0 bg-white border border-stone-300 rounded-md shadow-lg p-2 w-64 max-h-56 overflow-y-auto grid grid-cols-8 gap-1">
+            <button
+              type="button"
+              onClick={() => { onChange(""); setOpen(false); }}
+              title="Aucun emoji"
+              className="w-7 h-7 rounded hover:bg-stone-100 flex items-center justify-center text-stone-400 text-xs"
+            >
+              ✕
+            </button>
+            {options.map((e) => (
+              <button
+                key={e}
+                type="button"
+                onClick={() => { onChange(e); setOpen(false); }}
+                className={`w-7 h-7 rounded hover:bg-stone-100 flex items-center justify-center text-base ${value === e ? "bg-stone-100 ring-1 ring-stone-400" : ""}`}
+              >
+                {e}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function RefListEditor({ title, description, items, placeholder, withColor, withEmoji, emojiOptions, onAdd, onUpdate, onUpdateColor, onUpdateEmoji, onRemove, blockedMessage }) {
   const [newName, setNewName] = useState("");
   const [newColor, setNewColor] = useState(PALETTE[0]);
+  const [newEmoji, setNewEmoji] = useState("");
   const [error, setError] = useState("");
 
   return (
@@ -1100,6 +1383,7 @@ function RefListEditor({ title, description, items, placeholder, withColor, onAd
       <ul className="space-y-2">
         {items.map((it) => (
           <li key={it.id} className="flex items-center gap-3 border border-stone-200 rounded-md p-2.5">
+            {withEmoji && <EmojiPicker value={it.emoji || ""} onChange={(e) => onUpdateEmoji(it.id, e)} options={emojiOptions} />}
             <input
               value={it.name}
               onChange={(e) => onUpdate(it.id, e.target.value)}
@@ -1122,6 +1406,12 @@ function RefListEditor({ title, description, items, placeholder, withColor, onAd
         {items.length === 0 && <p className="text-sm text-stone-400 py-2">Aucun élément pour l'instant.</p>}
       </ul>
       <div className="border-t border-stone-100 pt-3 flex flex-wrap items-end gap-3">
+        {withEmoji && (
+          <div>
+            <label className="text-xs text-stone-500 block mb-1">Emoji</label>
+            <EmojiPicker value={newEmoji} onChange={setNewEmoji} options={emojiOptions} />
+          </div>
+        )}
         <div>
           <label className="text-xs text-stone-500 block mb-1">Nouveau</label>
           <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder={placeholder} className="px-2.5 py-1.5 rounded-md border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-stone-400" />
@@ -1133,7 +1423,7 @@ function RefListEditor({ title, description, items, placeholder, withColor, onAd
           </div>
         )}
         <button
-          onClick={() => { if (newName.trim()) { onAdd(newName.trim(), withColor ? newColor : undefined); setNewName(""); } }}
+          onClick={() => { if (newName.trim()) { onAdd(newName.trim(), withColor ? newColor : undefined, withEmoji ? newEmoji : undefined); setNewName(""); setNewEmoji(""); } }}
           className="px-3 py-1.5 text-sm rounded-md border border-stone-400 text-stone-700 hover:bg-stone-100"
         >
           <Plus size={14} className="inline -mt-0.5 mr-1" />Ajouter
@@ -1237,7 +1527,7 @@ function ImportContactsPanel({ contactTypes, familyMembers, onImportContacts }) 
               <label className="text-xs text-stone-500 block mb-1">Membre pour tous</label>
               <select value={bulkMember} onChange={(e) => setBulkMember(e.target.value)} className="px-2.5 py-1.5 rounded-md border border-stone-300 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-800">
                 <option value="">{GENERAL_LABEL}</option>
-                {familyMembers.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                {familyMembers.map((m) => <option key={m.id} value={m.id}>{memberLabel(m)}</option>)}
               </select>
             </div>
             <button onClick={applyBulk} className="px-3 py-1.5 text-sm rounded-md border border-stone-400 text-stone-700 hover:bg-white">Appliquer à tous</button>
@@ -1287,7 +1577,7 @@ function ImportContactsPanel({ contactTypes, familyMembers, onImportContacts }) 
                   className="px-2 py-1 rounded-md border border-stone-300 bg-white text-xs"
                 >
                   <option value="">{GENERAL_LABEL}</option>
-                  {familyMembers.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                  {familyMembers.map((m) => <option key={m.id} value={m.id}>{memberLabel(m)}</option>)}
                 </select>
               </div>
             ))}
@@ -1306,7 +1596,7 @@ function ImportContactsPanel({ contactTypes, familyMembers, onImportContacts }) 
   );
 }
 
-function CoffreSettingsTab({ familyMembers, contactTypes, activities, documentTypes, contacts, documents, onAddRef, onAddColoredRef, onUpdateRef, onRemoveRef, onUpdateRefColor, onImportContacts }) {
+function CoffreSettingsTab({ familyMembers, contactTypes, activities, documentTypes, contacts, documents, onAddRef, onAddColoredRef, onUpdateRef, onRemoveRef, onUpdateRefColor, onUpdateRefEmoji, onImportContacts }) {
   return (
     <div className="max-w-3xl mx-auto p-5 sm:p-8 space-y-6">
       <div>
@@ -1316,11 +1606,14 @@ function CoffreSettingsTab({ familyMembers, contactTypes, activities, documentTy
 
       <RefListEditor
         title="Membres de la famille"
-        description="Utilisés pour rattacher un contact ou un document à une personne (ou à « Général »)."
+        description="Utilisés pour rattacher un contact ou un document à une personne (ou à « Général »). L'emoji, s'il est choisi, s'affiche partout devant le nom."
         items={familyMembers}
         placeholder="Prénom"
-        onAdd={(name) => onAddRef("family_members", name)}
+        withEmoji
+        emojiOptions={FAMILY_EMOJI_OPTIONS}
+        onAdd={(name, _color, emoji) => onAddRef("family_members", name, emoji)}
         onUpdate={(id, name) => onUpdateRef("family_members", id, name)}
+        onUpdateEmoji={(id, emoji) => onUpdateRefEmoji("family_members", id, emoji)}
         onRemove={(id) => onRemoveRef("family_members", id)}
         blockedMessage={(name) => `« ${name} » est encore utilisé par des contacts ou documents : réaffectez-les avant de le supprimer.`}
       />
@@ -1353,11 +1646,14 @@ function CoffreSettingsTab({ familyMembers, contactTypes, activities, documentTy
 
       <RefListEditor
         title="Types de document"
-        description="Ex : Carte d'identité, Permis de conduire, Justificatif de domicile, Passeport, Carnet de santé…"
+        description="Ex : Carte d'identité, Permis de conduire, Justificatif de domicile, Passeport, Carnet de santé… L'emoji remplace l'icône générique dans la liste des documents."
         items={documentTypes}
         placeholder="Nom du type"
-        onAdd={(name) => onAddRef("document_types", name)}
+        withEmoji
+        emojiOptions={DOCUMENT_EMOJI_OPTIONS}
+        onAdd={(name, _color, emoji) => onAddRef("document_types", name, emoji)}
         onUpdate={(id, name) => onUpdateRef("document_types", id, name)}
+        onUpdateEmoji={(id, emoji) => onUpdateRefEmoji("document_types", id, emoji)}
         onRemove={(id) => onRemoveRef("document_types", id)}
         blockedMessage={(name) => `« ${name} » est utilisé par des documents : réaffectez-les avant de le supprimer.`}
       />
@@ -1437,7 +1733,7 @@ function EventsTab({ contacts, documents, familyMemberById, documentTypeById, on
             <div key={d.id} className="flex items-center gap-3 px-1 py-1.5 border-b border-stone-50 last:border-0">
               <FileText size={16} className="text-stone-400 shrink-0" />
               <div className="min-w-0 flex-1">
-                <p className="text-sm text-stone-800 truncate">{d.libelle} <span className="text-stone-400">— {documentTypeById[d.document_type_id]?.name}</span></p>
+                <p className="text-sm text-stone-800 truncate">{d.libelle} <span className="text-stone-400">— {typeLabel(documentTypeById[d.document_type_id])}</span></p>
               </div>
               <span className={`text-xs shrink-0 ${expired ? "text-rose-600" : "text-amber-600"}`}>
                 {expired ? "Expiré le" : "Jusqu'au"} {formatDateFR(d.date_fin_validite)}
@@ -1446,6 +1742,387 @@ function EventsTab({ contacts, documents, familyMemberById, documentTypeById, on
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------- Santé (carnet de vaccination) ---------------------------- */
+
+function HealthTab({ familyMembers, vaccinations, documents, documentTypes, onSaveVaccination, onDeleteVaccination, onImportVaccinations, onExtractHealthRecord, onSaveDocument }) {
+  const [selectedMemberId, setSelectedMemberId] = useState(familyMembers[0]?.id || "");
+  const [editing, setEditing] = useState(null); // null fermé, {} nouveau, {...} édition
+  const [importing, setImporting] = useState(false);
+
+  useEffect(() => {
+    if (!selectedMemberId && familyMembers[0]) setSelectedMemberId(familyMembers[0].id);
+  }, [familyMembers, selectedMemberId]);
+
+  const memberVaccinations = useMemo(() => {
+    return vaccinations
+      .filter((v) => v.family_member_id === selectedMemberId)
+      .sort((a, b) => {
+        const da = a.date_administered ? new Date(a.date_administered) : null;
+        const db = b.date_administered ? new Date(b.date_administered) : null;
+        if (da && db) return db - da;
+        if (da) return -1;
+        if (db) return 1;
+        return normalizeStr(a.vaccine_name).localeCompare(normalizeStr(b.vaccine_name), "fr");
+      });
+  }, [vaccinations, selectedMemberId]);
+
+  if (familyMembers.length === 0) {
+    return (
+      <div className="max-w-3xl mx-auto p-5 sm:p-8">
+        <h1 className="font-serif text-2xl text-blue-950 tracking-tight">Santé</h1>
+        <p className="text-stone-500 text-sm mt-2">
+          Ajoutez d'abord un membre de la famille dans Paramétrage pour pouvoir suivre son carnet de vaccination.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-3xl mx-auto p-5 sm:p-8 space-y-5">
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="font-serif text-2xl text-blue-950 tracking-tight">Santé</h1>
+          <p className="text-stone-500 text-sm mt-1">Carnet de vaccination, par membre de la famille.</p>
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setImporting(true)}
+            className="flex items-center gap-1.5 px-3 py-2 text-sm rounded-md border border-stone-300 bg-white hover:bg-stone-100"
+          >
+            <UploadCloud size={15} /> Importer un scan
+          </button>
+          <button
+            onClick={() => setEditing({})}
+            className="flex items-center gap-1.5 px-3 py-2 text-sm rounded-md bg-blue-950 text-white hover:bg-blue-900"
+          >
+            <Plus size={15} /> Ajouter
+          </button>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-1.5">
+        {familyMembers.map((m) => (
+          <button
+            key={m.id}
+            onClick={() => setSelectedMemberId(m.id)}
+            className={`px-3 py-1.5 rounded-full text-sm border ${
+              selectedMemberId === m.id ? "bg-blue-950 text-white border-blue-950" : "bg-white text-stone-600 border-stone-300 hover:bg-stone-100"
+            }`}
+          >
+            {memberLabel(m)}
+          </button>
+        ))}
+      </div>
+
+      <div className="bg-white rounded-lg border border-stone-200 divide-y divide-stone-100 overflow-hidden">
+        {memberVaccinations.length === 0 && (
+          <p className="text-sm text-stone-400 py-8 text-center">Aucune vaccination enregistrée pour ce membre.</p>
+        )}
+        {memberVaccinations.map((v) => (
+          <div key={v.id} className="px-4 py-3 flex items-center gap-3 hover:bg-stone-50">
+            <div className="w-9 h-9 rounded-full bg-blue-50 text-blue-900 flex items-center justify-center shrink-0">
+              <Syringe size={16} />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium text-stone-800 truncate">
+                {v.vaccine_name}{v.dose_label ? ` — ${v.dose_label}` : ""}
+              </p>
+              <p className="text-xs text-stone-400 truncate">
+                {v.date_administered ? formatDateFR(v.date_administered) : "Date inconnue"}
+                {v.lot_number ? ` · Lot ${v.lot_number}` : ""}
+              </p>
+            </div>
+            <button onClick={() => setEditing(v)} className="text-xs px-2.5 py-1.5 rounded-md border border-stone-300 hover:bg-white shrink-0">
+              Modifier
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {editing !== null && (
+        <VaccinationEditor
+          vaccination={editing}
+          familyMembers={familyMembers}
+          defaultMemberId={selectedMemberId}
+          onCancel={() => setEditing(null)}
+          onSave={async (fields) => {
+            const ok = await onSaveVaccination(fields, editing.id);
+            if (ok) setEditing(null);
+          }}
+          onDelete={editing.id ? async () => { await onDeleteVaccination(editing.id); setEditing(null); } : null}
+        />
+      )}
+
+      {importing && (
+        <HealthImportPanel
+          familyMembers={familyMembers}
+          documentTypes={documentTypes}
+          defaultMemberId={selectedMemberId}
+          onCancel={() => setImporting(false)}
+          onExtract={onExtractHealthRecord}
+          onSaveDocument={onSaveDocument}
+          onImportVaccinations={onImportVaccinations}
+          onDone={() => setImporting(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+function VaccinationEditor({ vaccination, familyMembers, defaultMemberId, onSave, onCancel, onDelete }) {
+  const [familyMemberId, setFamilyMemberId] = useState(vaccination.family_member_id || defaultMemberId || familyMembers[0]?.id || "");
+  const [vaccineName, setVaccineName] = useState(vaccination.vaccine_name || "");
+  const [dateAdministered, setDateAdministered] = useState(vaccination.date_administered || "");
+  const [lotNumber, setLotNumber] = useState(vaccination.lot_number || "");
+  const [doseLabel, setDoseLabel] = useState(vaccination.dose_label || "");
+  const [notes, setNotes] = useState(vaccination.notes || "");
+  const [error, setError] = useState("");
+
+  return (
+    <div className="fixed inset-0 bg-stone-900/40 flex items-end sm:items-center justify-center z-20 p-0 sm:p-4">
+      <div className="bg-white rounded-t-xl sm:rounded-xl w-full sm:max-w-lg max-h-[92vh] overflow-y-auto p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="font-serif text-lg text-stone-800">{vaccination.id ? "Modifier la vaccination" : "Nouvelle vaccination"}</h3>
+          <button onClick={onCancel} className="text-stone-400 hover:text-stone-600"><X size={18} /></button>
+        </div>
+
+        <div className="grid sm:grid-cols-2 gap-3">
+          <div className="sm:col-span-2">
+            <label className="text-xs text-stone-500 block mb-1">Membre de la famille</label>
+            <select value={familyMemberId} onChange={(e) => setFamilyMemberId(e.target.value)} className="w-full px-2.5 py-1.5 rounded-md border border-stone-300 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-800">
+              {familyMembers.map((m) => <option key={m.id} value={m.id}>{memberLabel(m)}</option>)}
+            </select>
+          </div>
+          <div className="sm:col-span-2">
+            <label className="text-xs text-stone-500 block mb-1">Vaccin</label>
+            <input value={vaccineName} onChange={(e) => setVaccineName(e.target.value)} placeholder="Ex : DTPolio, ROR, hépatite B…" className="w-full px-2.5 py-1.5 rounded-md border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-800" />
+          </div>
+          <div>
+            <label className="text-xs text-stone-500 block mb-1">Date</label>
+            <input type="date" value={dateAdministered} onChange={(e) => setDateAdministered(e.target.value)} className="w-full px-2.5 py-1.5 rounded-md border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-800" />
+          </div>
+          <div>
+            <label className="text-xs text-stone-500 block mb-1">Dose / rappel</label>
+            <input value={doseLabel} onChange={(e) => setDoseLabel(e.target.value)} placeholder="Ex : 1ère dose, rappel…" className="w-full px-2.5 py-1.5 rounded-md border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-800" />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="text-xs text-stone-500 block mb-1">N° de lot</label>
+            <input value={lotNumber} onChange={(e) => setLotNumber(e.target.value)} className="w-full px-2.5 py-1.5 rounded-md border border-stone-300 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-800" />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="text-xs text-stone-500 block mb-1">Notes</label>
+            <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className="w-full px-2.5 py-1.5 rounded-md border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-800" />
+          </div>
+        </div>
+
+        {error && <p className="text-xs text-rose-600">{error}</p>}
+        <div className="flex items-center justify-between pt-1">
+          {onDelete ? (
+            <button onClick={onDelete} className="flex items-center gap-1 text-xs text-rose-600 hover:text-rose-700 px-2 py-1.5">
+              <Trash2 size={14} /> Supprimer
+            </button>
+          ) : <span />}
+          <div className="flex gap-2">
+            <button onClick={onCancel} className="px-3 py-1.5 text-sm rounded-md border border-stone-300 hover:bg-stone-100">Annuler</button>
+            <button
+              onClick={() => {
+                if (!vaccineName.trim()) { setError("Entrez le nom du vaccin."); return; }
+                if (!familyMemberId) { setError("Choisissez un membre de la famille."); return; }
+                onSave({
+                  familyMemberId, vaccineName: vaccineName.trim(), dateAdministered,
+                  lotNumber: lotNumber.trim(), doseLabel: doseLabel.trim(), notes: notes.trim(),
+                });
+              }}
+              className="px-3 py-1.5 text-sm rounded-md bg-blue-950 text-white hover:bg-blue-900"
+            >
+              Enregistrer
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function emptyExtractedRow() {
+  return { id: Math.random().toString(36).slice(2), include: true, vaccineName: "", dateAdministered: "", lotNumber: "", doseLabel: "" };
+}
+
+// Import d'un scan de carnet de santé : lit le fichier, l'envoie à la fonction
+// d'extraction (Gemini côté serveur), puis affiche les lignes trouvées pour
+// relecture/correction avant tout enregistrement — rien n'est jamais inséré
+// dans le carnet de vaccination sans validation manuelle.
+function HealthImportPanel({ familyMembers, documentTypes, defaultMemberId, onCancel, onExtract, onSaveDocument, onImportVaccinations, onDone }) {
+  const [familyMemberId, setFamilyMemberId] = useState(defaultMemberId || familyMembers[0]?.id || "");
+  const [file, setFile] = useState(null);
+  const [status, setStatus] = useState("idle"); // idle | analyzing | review | saving
+  const [rows, setRows] = useState([]);
+  const [error, setError] = useState("");
+  const [keepFile, setKeepFile] = useState(true);
+
+  const healthDocType = documentTypes.find((t) => normalizeStr(t.name).includes(normalizeStr("santé")) || normalizeStr(t.name).includes(normalizeStr("carnet")));
+
+  async function handleAnalyze() {
+    if (!file) { setError("Choisissez d'abord une photo ou un PDF du carnet."); return; }
+    if (!familyMemberId) { setError("Choisissez le membre de la famille concerné."); return; }
+    setError("");
+    setStatus("analyzing");
+    try {
+      const base64 = await fileToBase64(file);
+      const entries = await onExtract(base64, file.type || "application/octet-stream");
+      setRows(
+        (entries && entries.length ? entries : [{}]).map((e) => ({
+          id: Math.random().toString(36).slice(2),
+          include: true,
+          vaccineName: e.vaccineName || e.vaccine || "",
+          dateAdministered: e.dateAdministered || e.date || "",
+          lotNumber: e.lotNumber || e.lot || "",
+          doseLabel: e.doseLabel || e.dose || "",
+        }))
+      );
+      setStatus("review");
+    } catch (e) {
+      setError(e.message || "La lecture automatique du scan a échoué.");
+      setStatus("idle");
+    }
+  }
+
+  function updateRow(id, field, value) {
+    setRows((rs) => rs.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
+  }
+  function removeRow(id) {
+    setRows((rs) => rs.filter((r) => r.id !== id));
+  }
+
+  async function handleConfirm() {
+    const included = rows.filter((r) => r.include && r.vaccineName.trim());
+    if (included.length === 0) { setError("Cochez au moins une ligne avec un nom de vaccin."); return; }
+    setStatus("saving");
+    setError("");
+    if (keepFile && file && healthDocType) {
+      await onSaveDocument(
+        {
+          documentTypeId: healthDocType.id,
+          familyMemberId,
+          libelle: `Carnet de santé — import du ${formatDateFR(new Date().toISOString().slice(0, 10))}`,
+          dateDocument: "",
+          dateFinValidite: "",
+          file,
+        },
+        null,
+        null
+      );
+    }
+    await onImportVaccinations(
+      familyMemberId,
+      included.map((r) => ({
+        vaccineName: r.vaccineName.trim(),
+        dateAdministered: r.dateAdministered,
+        lotNumber: r.lotNumber.trim(),
+        doseLabel: r.doseLabel.trim(),
+        notes: "",
+      })),
+      null
+    );
+    onDone();
+  }
+
+  return (
+    <div className="fixed inset-0 bg-stone-900/40 flex items-end sm:items-center justify-center z-20 p-0 sm:p-4">
+      <div className="bg-white rounded-t-xl sm:rounded-xl w-full sm:max-w-xl max-h-[92vh] overflow-y-auto p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="font-serif text-lg text-stone-800">Importer un scan de carnet de santé</h3>
+          <button onClick={onCancel} className="text-stone-400 hover:text-stone-600"><X size={18} /></button>
+        </div>
+
+        {status !== "review" && (
+          <div className="space-y-3">
+            <div>
+              <label className="text-xs text-stone-500 block mb-1">Membre de la famille</label>
+              <select value={familyMemberId} onChange={(e) => setFamilyMemberId(e.target.value)} className="w-full px-2.5 py-1.5 rounded-md border border-stone-300 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-800">
+                {familyMembers.map((m) => <option key={m.id} value={m.id}>{memberLabel(m)}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs text-stone-500 block mb-1">Photo ou PDF du carnet</label>
+              <input
+                type="file"
+                accept="image/*,application/pdf"
+                onChange={(e) => setFile(e.target.files?.[0] || null)}
+                className="w-full text-sm text-stone-600 file:mr-3 file:px-2.5 file:py-1.5 file:rounded-md file:border file:border-stone-300 file:bg-white file:text-sm file:cursor-pointer"
+              />
+            </div>
+            <p className="text-xs text-stone-500 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-2">
+              Écriture manuscrite : la lecture automatique peut se tromper. Vous pourrez corriger chaque ligne avant tout enregistrement — rien n'est ajouté au carnet sans votre validation.
+            </p>
+            {error && <p className="text-xs text-rose-600">{error}</p>}
+            <div className="flex justify-end gap-2 pt-1">
+              <button onClick={onCancel} className="px-3 py-1.5 text-sm rounded-md border border-stone-300 hover:bg-stone-100">Annuler</button>
+              <button
+                onClick={handleAnalyze}
+                disabled={status === "analyzing"}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md bg-blue-950 text-white hover:bg-blue-900 disabled:opacity-60"
+              >
+                {status === "analyzing" && <Loader2 size={14} className="animate-spin" />}
+                {status === "analyzing" ? "Analyse en cours…" : "Analyser"}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {status === "review" && (
+          <div className="space-y-3">
+            <p className="text-xs text-stone-500">
+              {rows.length} ligne{rows.length > 1 ? "s" : ""} détectée{rows.length > 1 ? "s" : ""} pour <span className="font-medium">{memberLabel(familyMembers.find((m) => m.id === familyMemberId))}</span>. Relisez et corrigez avant d'enregistrer.
+            </p>
+            <div className="space-y-2">
+              {rows.map((r) => (
+                <div key={r.id} className="flex items-start gap-2 bg-stone-50 rounded-md p-2">
+                  <button type="button" onClick={() => updateRow(r.id, "include", !r.include)} className="mt-1.5 shrink-0" title={r.include ? "Exclure cette ligne" : "Inclure cette ligne"}>
+                    {r.include ? <CheckSquare size={16} className="text-blue-800" /> : <Square size={16} className="text-stone-400" />}
+                  </button>
+                  <div className="grid grid-cols-2 gap-1.5 flex-1 min-w-0">
+                    <input value={r.vaccineName} onChange={(e) => updateRow(r.id, "vaccineName", e.target.value)} placeholder="Vaccin" className="col-span-2 px-2 py-1 rounded border border-stone-300 text-xs focus:outline-none focus:ring-2 focus:ring-blue-800" />
+                    <input type="date" value={r.dateAdministered} onChange={(e) => updateRow(r.id, "dateAdministered", e.target.value)} className="px-2 py-1 rounded border border-stone-300 text-xs focus:outline-none focus:ring-2 focus:ring-blue-800" />
+                    <input value={r.doseLabel} onChange={(e) => updateRow(r.id, "doseLabel", e.target.value)} placeholder="Dose / rappel" className="px-2 py-1 rounded border border-stone-300 text-xs focus:outline-none focus:ring-2 focus:ring-blue-800" />
+                    <input value={r.lotNumber} onChange={(e) => updateRow(r.id, "lotNumber", e.target.value)} placeholder="N° de lot" className="col-span-2 px-2 py-1 rounded border border-stone-300 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-blue-800" />
+                  </div>
+                  <button type="button" onClick={() => removeRow(r.id)} className="mt-1 text-stone-400 hover:text-rose-600 shrink-0"><Trash2 size={14} /></button>
+                </div>
+              ))}
+              <button type="button" onClick={() => setRows((rs) => [...rs, emptyExtractedRow()])} className="text-xs text-blue-800 hover:underline flex items-center gap-1">
+                <Plus size={12} /> Ajouter une ligne
+              </button>
+            </div>
+
+            {healthDocType ? (
+              <label className="flex items-center gap-2 text-xs text-stone-600">
+                <input type="checkbox" checked={keepFile} onChange={(e) => setKeepFile(e.target.checked)} />
+                Garder aussi le scan dans Documents ({typeLabel(healthDocType)})
+              </label>
+            ) : (
+              <p className="text-xs text-stone-400">Aucun type de document « Carnet de santé » trouvé : le scan ne sera pas gardé dans Documents (vous pouvez l'ajouter vous-même depuis l'onglet Documents).</p>
+            )}
+
+            {error && <p className="text-xs text-rose-600">{error}</p>}
+            <div className="flex justify-end gap-2 pt-1">
+              <button onClick={() => setStatus("idle")} className="px-3 py-1.5 text-sm rounded-md border border-stone-300 hover:bg-stone-100">Retour</button>
+              <button
+                onClick={handleConfirm}
+                disabled={status === "saving"}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md bg-blue-950 text-white hover:bg-blue-900 disabled:opacity-60"
+              >
+                {status === "saving" && <Loader2 size={14} className="animate-spin" />}
+                {status === "saving" ? "Enregistrement…" : "Enregistrer"}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

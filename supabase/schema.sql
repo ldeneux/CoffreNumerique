@@ -14,6 +14,7 @@ set search_path to coffre, public;
 create table if not exists coffre.family_members (
   id uuid primary key default gen_random_uuid(),
   name text not null unique,
+  emoji text,
   created_at timestamptz not null default now()
 );
 
@@ -37,6 +38,7 @@ create table if not exists coffre.activities (
 create table if not exists coffre.document_types (
   id uuid primary key default gen_random_uuid(),
   name text not null unique,
+  emoji text,
   created_at timestamptz not null default now()
 );
 
@@ -58,6 +60,8 @@ create table if not exists coffre.contacts (
   ville text,
   date_naissance date,
   favori boolean not null default false,
+  numero_urgence boolean not null default false,
+  epingle boolean not null default false,
   notes text,
   created_at timestamptz not null default now(),
   constraint contact_has_a_name check (coalesce(nom, '') <> '' or coalesce(societe, '') <> '')
@@ -77,6 +81,22 @@ create table if not exists coffre.documents (
   created_at timestamptz not null default now()
 );
 
+-- Carnet de vaccination (par membre de la famille). Rempli à la main, ou via
+-- import assisté d'un scan (voir supabase/functions/extract-health-record et
+-- le README : nécessite une clé GEMINI_API_KEY côté Supabase). Dans tous les
+-- cas, l'appli ne fait jamais d'insertion automatique sans relecture par vous.
+create table if not exists coffre.vaccinations (
+  id uuid primary key default gen_random_uuid(),
+  family_member_id uuid not null references coffre.family_members(id) on delete cascade,
+  vaccine_name text not null,
+  date_administered date,
+  lot_number text,
+  dose_label text,
+  source_document_id uuid references coffre.documents(id) on delete set null,
+  notes text,
+  created_at timestamptz not null default now()
+);
+
 -- Sécurité : row level security activée sur toutes les tables.
 -- Seuls les comptes authentifiés (créés manuellement, voir README) peuvent lire/écrire.
 alter table coffre.family_members enable row level security;
@@ -85,6 +105,7 @@ alter table coffre.activities enable row level security;
 alter table coffre.document_types enable row level security;
 alter table coffre.contacts enable row level security;
 alter table coffre.documents enable row level security;
+alter table coffre.vaccinations enable row level security;
 
 create policy "authenticated can read family_members" on coffre.family_members for select using (auth.role() = 'authenticated');
 create policy "authenticated can write family_members" on coffre.family_members for insert with check (auth.role() = 'authenticated');
@@ -116,6 +137,11 @@ create policy "authenticated can write documents" on coffre.documents for insert
 create policy "authenticated can update documents" on coffre.documents for update using (auth.role() = 'authenticated');
 create policy "authenticated can delete documents" on coffre.documents for delete using (auth.role() = 'authenticated');
 
+create policy "authenticated can read vaccinations" on coffre.vaccinations for select using (auth.role() = 'authenticated');
+create policy "authenticated can write vaccinations" on coffre.vaccinations for insert with check (auth.role() = 'authenticated');
+create policy "authenticated can update vaccinations" on coffre.vaccinations for update using (auth.role() = 'authenticated');
+create policy "authenticated can delete vaccinations" on coffre.vaccinations for delete using (auth.role() = 'authenticated');
+
 -- Active le temps réel (pour que tous les comptes voient les mises à jour instantanément)
 alter publication supabase_realtime add table coffre.family_members;
 alter publication supabase_realtime add table coffre.contact_types;
@@ -123,6 +149,7 @@ alter publication supabase_realtime add table coffre.activities;
 alter publication supabase_realtime add table coffre.document_types;
 alter publication supabase_realtime add table coffre.contacts;
 alter publication supabase_realtime add table coffre.documents;
+alter publication supabase_realtime add table coffre.vaccinations;
 
 -- Autorise les rôles de l'API à utiliser ce schéma (sans ça PostgREST refuse,
 -- même une fois "coffre" ajouté aux "Exposed schemas" du Dashboard).
@@ -147,12 +174,12 @@ on conflict (name) do nothing;
 insert into coffre.activities (name, color) values ('Général', 'stone')
 on conflict (name) do nothing;
 
-insert into coffre.document_types (name) values
-  ('Carte d''identité'),
-  ('Permis de conduire'),
-  ('Justificatif de domicile'),
-  ('Passeport'),
-  ('Carnet de santé')
+insert into coffre.document_types (name, emoji) values
+  ('Carte d''identité', '🪪'),
+  ('Permis de conduire', '🚘'),
+  ('Justificatif de domicile', '🏠'),
+  ('Passeport', '🛂'),
+  ('Carnet de santé', '💉')
 on conflict (name) do nothing;
 
 -- Stockage des fichiers de documents (bucket privé : accessible uniquement
