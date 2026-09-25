@@ -491,7 +491,7 @@ export default function CoffreApp({ session }) {
     <div className="w-full min-h-screen bg-stone-50 font-sans text-stone-900 flex">
       <aside className="w-56 shrink-0 bg-stone-100 border-r border-stone-200 min-h-screen p-4 hidden sm:flex flex-col">
         <div className="mb-6 px-1 flex flex-col items-center text-center gap-2">
-          <img src="/icon.svg" alt="" width={80} height={80} className="shrink-0" />
+          <img src="/icon.svg" alt="" width={96} height={96} className="shrink-0" />
           <div className="min-w-0">
             <p className="font-serif text-lg text-blue-950 leading-tight">Coffre numérique</p>
             <p className="text-xs text-stone-500 truncate">{session.user.email}</p>
@@ -525,7 +525,7 @@ export default function CoffreApp({ session }) {
             </button>
           </div>
         </nav>
-        <div className="flex-1 min-h-0 overflow-y-auto -mx-1 px-1 mt-1">
+        <div className="flex-1 min-h-0 overflow-y-auto -mx-1 px-1 pt-2 mt-2 border-t border-stone-200">
           <QuickDialSection title="Numéros d'urgence" icon={AlertTriangle} contacts={emergencyContacts} accent="text-rose-500" />
           <QuickDialSection title="Contacts épinglés" icon={Pin} contacts={pinnedContacts} accent="text-blue-800" />
         </div>
@@ -1166,7 +1166,7 @@ function DocumentsTab({ documents, documentTypes, familyMembers, documentTypeByI
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-medium text-stone-800 truncate">{d.libelle}</p>
                 <p className="text-xs text-stone-400 truncate">
-                  {typeLabel(docType)}
+                  {docType?.name || "—"}
                   {d.date_fin_validite && (
                     <>
                       {" · "}
