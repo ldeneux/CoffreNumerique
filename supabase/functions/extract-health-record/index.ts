@@ -11,16 +11,17 @@
 // Déploiement : voir le README, section "Carnet de santé (extraction par IA)".
 // Nécessite un secret GEMINI_API_KEY (clé obtenue sur https://aistudio.google.com/apikey).
 
-// @deno-types="npm:@types/node"
-// (déclarations minimales pour l'environnement Deno des Edge Functions)
-declare const Deno: { env: { get(key: string): string | undefined } };
-
 const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-const GEMINI_MODEL = "gemini-2.5-flash";
+// Modèle utilisé via l'API classique generateContent. gemini-2.5-flash n'est
+// plus proposé aux nouvelles clés API (Google pousse vers gemini-3.8-flash,
+// mais uniquement via sa nouvelle "Interactions API", différente de celle-ci) ;
+// gemini-2.5-flash-lite reste disponible sur generateContent.
+const GEMINI_MODEL = "gemini-2.5-flash-lite";
 
 const RESPONSE_SCHEMA = {
   type: "OBJECT",
@@ -58,11 +59,13 @@ function jsonResponse(body: unknown, status = 200) {
 }
 
 Deno.serve(async (req: Request) => {
+  console.log(`[extract-health-record] requête reçue : ${req.method}`);
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: CORS_HEADERS });
   }
 
   const apiKey = Deno.env.get("GEMINI_API_KEY");
+  console.log(`[extract-health-record] GEMINI_API_KEY ${apiKey ? "présente" : "ABSENTE"}`);
   if (!apiKey) {
     return jsonResponse(
       { error: "GEMINI_API_KEY n'est pas configurée côté Supabase (Project Settings > Edge Functions > Secrets). Voir le README." },
@@ -82,6 +85,7 @@ Deno.serve(async (req: Request) => {
   if (!base64 || typeof base64 !== "string") {
     return jsonResponse({ error: "Fichier manquant (champ base64 vide)." }, 400);
   }
+  console.log(`[extract-health-record] fichier reçu : ${mimeType}, ${Math.round((base64.length * 3) / 4 / 1024)} Ko environ`);
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
   const payload = {
@@ -90,7 +94,7 @@ Deno.serve(async (req: Request) => {
         role: "user",
         parts: [
           { text: PROMPT },
-          { inline_data: { mime_type: mimeType || "application/octet-stream", data: base64 } },
+          { inlineData: { mimeType: mimeType || "application/octet-stream", data: base64 } },
         ],
       },
     ],
@@ -109,6 +113,7 @@ Deno.serve(async (req: Request) => {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 120_000);
 
+  console.log("[extract-health-record] appel à Gemini...");
   let geminiRes: Response;
   try {
     geminiRes = await fetch(url, {
@@ -128,6 +133,7 @@ Deno.serve(async (req: Request) => {
   } finally {
     clearTimeout(timeout);
   }
+  console.log(`[extract-health-record] Gemini a répondu : ${geminiRes.status}`);
 
   if (!geminiRes.ok) {
     const detail = await geminiRes.text().catch(() => "");
@@ -147,5 +153,6 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ error: "La réponse de Gemini n'était pas un JSON valide." }, 502);
   }
 
+  console.log(`[extract-health-record] ${Array.isArray(parsed.entries) ? parsed.entries.length : 0} entrée(s) extraite(s)`);
   return jsonResponse({ entries: Array.isArray(parsed.entries) ? parsed.entries : [] });
 });
