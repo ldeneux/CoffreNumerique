@@ -17,11 +17,10 @@ const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-// Modèle utilisé via l'API classique generateContent. gemini-2.5-flash n'est
-// plus proposé aux nouvelles clés API (Google pousse vers gemini-3.8-flash,
-// mais uniquement via sa nouvelle "Interactions API", différente de celle-ci) ;
-// gemini-2.5-flash-lite reste disponible sur generateContent.
-const GEMINI_MODEL = "gemini-2.5-flash-lite";
+// Modèle utilisé via l'API classique generateContent — gemini-3.8-flash y
+// reste supporté (endpoint "hérité" mais pleinement fonctionnel selon Google),
+// avec la même structure de requête/réponse que les anciens modèles Flash.
+const GEMINI_MODEL = "gemini-3.8-flash";
 
 const RESPONSE_SCHEMA = {
   type: "OBJECT",

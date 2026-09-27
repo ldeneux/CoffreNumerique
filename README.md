@@ -144,7 +144,13 @@ formellement.
   un raccourci sous le menu (nom/prénom uniquement) ; un clic affiche et
   copie le numéro (mobile, sinon fixe), et le libellé revient tout seul au
   bout de 5 secondes.
-- **Santé** : carnet de vaccination par membre de la famille, saisie manuelle
-  ou import assisté d'un scan (voir section 6 ci-dessus).
+- **Santé** : trois vues — **Calendrier** (grille vaccin × âge avec pastille
+  à jour/en retard, indicative, basée sur le calendrier vaccinal général —
+  nécessite la date de naissance du membre, à saisir dans Paramétrage),
+  **Carnet de santé** (reproduction à l'écran + bouton "Exporter en PDF", qui
+  utilise l'impression du navigateur), et **Détail** (la liste brute,
+  éditable). Saisie manuelle ou import assisté d'un scan (voir section 6
+  ci-dessus). Les vaccinations à venir ou en retard (≤ 3 mois) apparaissent
+  aussi dans l'onglet Événements.
 - Toute modification apparaît quasi instantanément chez les autres comptes
   connectés, grâce au temps réel Supabase.

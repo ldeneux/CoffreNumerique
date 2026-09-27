@@ -24,6 +24,8 @@ import {
   Pin,
   Syringe,
   Loader2,
+  ChevronDown,
+  ChevronRight,
   CalendarDays,
   CheckSquare,
   Square,
@@ -48,6 +50,139 @@ const FAMILY_EMOJI_OPTIONS = [...FAMILY_EMOJI_BASE, ...FAMILY_EMOJI_EXTRA];
 // Emoji des types de document : un jeu adapté aux pièces administratives
 // courantes (identité, véhicule, logement, banque, santé...).
 const DOCUMENT_EMOJI_OPTIONS = ["\u{1FAAA}", "\u{1F697}", "\u{1F698}", "\u{1F3E0}", "\u{1F4DC}", "\u{1F4CB}", "\u{1F393}", "\u{1F9FE}", "\u{1F3E6}", "\u271D\uFE0F", "\u{1F489}", "\u{1F4B6}", "\u{1F6C2}", "\u{1F4C4}", "\u{1F4C1}", "\u{1F5C2}\uFE0F", "\u{1F4D1}", "\u{1F3E5}", "\u2696\uFE0F", "\u{1F3AB}"];
+
+// Couleurs reprises du carnet de santé (échantillonnées sur un vrai carnet
+// scanné) : terracotta des titres/bordures, mauve des bandeaux, vert des
+// pictogrammes. Utilisées pour la vue "Carnet de santé" de l'onglet Santé.
+const CARNET_TERRACOTTA = "#B36845";
+const CARNET_MAUVE = "#8E7A9F";
+const CARNET_GREEN = "#5FAE58";
+
+// Référentiel indicatif du calendrier vaccinal pédiatrique français courant
+// (schéma général : primo-vaccination 2/4/11 mois pour l'hexavalent et le
+// pneumocoque, ROR à 12 et 16-18 mois, méningocoque C à 5 et 12 mois, rappels
+// à 6 ans, 11-13 ans puis 25 ans). Sert de repère organisationnel dans
+// l'appli : à confirmer systématiquement avec le pédiatre et le carnet
+// officiel, ce n'est pas un avis médical et certains schémas varient selon
+// l'année de naissance ou des situations particulières.
+const VACCINE_SCHEDULE = [
+  {
+    id: "bcg",
+    disease: "Tuberculose (BCG)",
+    keywords: ["bcg", "tuberculeuse"],
+    description: "La vaccination contre la tuberculose est recommandée chez les enfants exposés à un risque élevé de tuberculose à partir de l'âge de 1 mois et jusqu'à 15 ans.",
+    doses: [{ label: "1 mois", months: 1 }],
+  },
+  {
+    id: "dtcaphib",
+    disease: "Diphtérie, Tétanos, Poliomyélite, Coqueluche, Hib",
+    keywords: ["infanrix", "hexyon", "pentavac", "tetravac", "dtpolio", "dtp", "coqueluche", "hexavalent", "haemophilus", "tetanos", "tétanos"],
+    description: "Primo-vaccination à 2 et 4 mois, rappel à 11 mois, puis nouveaux rappels à 6 ans, 11-13 ans et 25 ans (vaccin dTPolio/dTCaPolio à l'âge adulte).",
+    doses: [
+      { label: "2 mois", months: 2 },
+      { label: "4 mois", months: 4 },
+      { label: "11 mois", months: 11 },
+      { label: "6 ans", months: 72 },
+      { label: "11-13 ans", months: 138 },
+      { label: "25 ans", months: 300 },
+    ],
+  },
+  {
+    id: "hepb",
+    disease: "Hépatite B",
+    keywords: ["hepatite b", "hépatite b", "engerix", "hexavalent", "infanrix", "hexyon"],
+    description: "Trois doses à 2, 4 et 11 mois, le plus souvent incluses dans le vaccin hexavalent donné en même temps que le DTPolio/Coqueluche/Hib.",
+    doses: [
+      { label: "2 mois", months: 2 },
+      { label: "4 mois", months: 4 },
+      { label: "11 mois", months: 11 },
+    ],
+  },
+  {
+    id: "pneumo",
+    disease: "Pneumocoque",
+    keywords: ["prevenar", "pneumocoque"],
+    description: "Trois doses à 2, 4 et 11 mois pour protéger contre les infections invasives à pneumocoque (méningites, pneumonies...).",
+    doses: [
+      { label: "2 mois", months: 2 },
+      { label: "4 mois", months: 4 },
+      { label: "11 mois", months: 11 },
+    ],
+  },
+  {
+    id: "ror",
+    disease: "Rougeole, Oreillons, Rubéole (ROR)",
+    keywords: ["ror", "priorix", "rougeole"],
+    description: "Une première dose à 12 mois, une seconde entre 16 et 18 mois.",
+    doses: [
+      { label: "12 mois", months: 12 },
+      { label: "16-18 mois", months: 17 },
+    ],
+  },
+  {
+    id: "menc",
+    disease: "Méningocoque (C, et ACWY/B selon recommandations)",
+    keywords: ["neisvac", "menveo", "meningocoque", "méningocoque", "bexsero", "meisvac"],
+    description: "Schéma méningocoque C : une dose à 5 mois, rappel à 12 mois. Des recommandations élargies (ACWY, B) existent selon l'âge, l'année de naissance et les facteurs de risque — à voir avec le pédiatre.",
+    doses: [
+      { label: "5 mois", months: 5 },
+      { label: "12 mois", months: 12 },
+    ],
+  },
+];
+
+// Toutes les colonnes d'âge utilisées par au moins un vaccin du référentiel,
+// dans l'ordre chronologique — sert d'en-têtes de colonnes au calendrier.
+const VACCINE_AGE_COLUMNS = (() => {
+  const seen = new Map();
+  VACCINE_SCHEDULE.forEach((entry) => entry.doses.forEach((d) => seen.set(d.months, d.label)));
+  return Array.from(seen.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map(([months, label]) => ({ months, label }));
+})();
+
+// Nombre de mois entre une date de naissance (AAAA-MM-JJ) et une date donnée.
+function monthsBetween(birthdateISO, toDate) {
+  if (!birthdateISO) return null;
+  const from = new Date(birthdateISO + "T00:00:00");
+  if (isNaN(from.getTime())) return null;
+  let months = (toDate.getFullYear() - from.getFullYear()) * 12 + (toDate.getMonth() - from.getMonth());
+  if (toDate.getDate() < from.getDate()) months -= 1;
+  return Math.max(0, months);
+}
+function matchesVaccineKeywords(vaccineName, keywords) {
+  const n = normalizeStr(vaccineName);
+  return keywords.some((k) => n.includes(normalizeStr(k)));
+}
+// Vaccinations enregistrées qui correspondent à un vaccin du référentiel,
+// triées par date. L'appariement se fait par mot-clé dans le nom du vaccin
+// saisi (pas par âge précis) : simple et robuste aux vaccins faits en avance
+// ou en retard, mais ce n'est qu'un repère, pas une vérification médicale.
+function vaccineEntryRecords(entry, records) {
+  return records
+    .filter((v) => matchesVaccineKeywords(v.vaccine_name, entry.keywords))
+    .slice()
+    .sort((a, b) => (a.date_administered || "").localeCompare(b.date_administered || ""));
+}
+function vaccineEntryStatus(entry, birthdateISO, records) {
+  const matched = vaccineEntryRecords(entry, records);
+  const ageMonths = monthsBetween(birthdateISO, new Date());
+  if (ageMonths === null) return { status: "inconnu", matched };
+  const dueDoses = entry.doses.filter((d) => d.months <= ageMonths);
+  if (dueDoses.length === 0) return { status: "pas_encore", matched };
+  if (matched.length >= dueDoses.length) return { status: "a_jour", matched };
+  return { status: "a_faire", matched };
+}
+// Prochaine dose non pointée et son délai en mois (négatif = en retard).
+// Utilisé par l'onglet Événements pour signaler ce qui approche ou est dépassé.
+function nextDueDoseInfo(entry, birthdateISO, records) {
+  const ageMonths = monthsBetween(birthdateISO, new Date());
+  if (ageMonths === null) return null;
+  const matched = vaccineEntryRecords(entry, records);
+  const nextDose = entry.doses[matched.length];
+  if (!nextDose) return null;
+  return { entry, dose: nextDose, monthsUntilDue: nextDose.months - ageMonths };
+}
 const SWATCH_BG = {
   blue: "bg-blue-500",
   emerald: "bg-emerald-500",
@@ -461,6 +596,11 @@ export default function CoffreApp({ session }) {
     if (error) setErrorMsg("Impossible de modifier l'emoji.");
     else fetchAll();
   }
+  async function updateFamilyMemberBirthdate(id, dateNaissance) {
+    const { error } = await supabase.from("family_members").update({ date_naissance: dateNaissance || null }).eq("id", id);
+    if (error) setErrorMsg("Impossible de modifier la date de naissance.");
+    else fetchAll();
+  }
   async function addColoredRef(table, name, color) {
     const { error } = await supabase.from(table).insert({ name, color: color || "stone" });
     if (error) setErrorMsg("Impossible d'ajouter cet élément.");
@@ -525,7 +665,7 @@ export default function CoffreApp({ session }) {
             </button>
           </div>
         </nav>
-        <div className="flex-1 min-h-0 overflow-y-auto -mx-1 px-1 pt-2 mt-2 border-t border-stone-200">
+        <div className="flex-1 min-h-0 overflow-y-auto -mx-1 px-1 pt-2 mt-5 border-t border-stone-200">
           <QuickDialSection title="Numéros d'urgence" icon={AlertTriangle} contacts={emergencyContacts} accent="text-rose-500" />
           <QuickDialSection title="Contacts épinglés" icon={Pin} contacts={pinnedContacts} accent="text-blue-800" />
         </div>
@@ -570,6 +710,8 @@ export default function CoffreApp({ session }) {
           <EventsTab
             contacts={contacts}
             documents={documents}
+            familyMembers={familyMembers}
+            vaccinations={vaccinations}
             familyMemberById={familyMemberById}
             documentTypeById={documentTypeById}
             onGoToContacts={() => setActiveTab("contacts")}
@@ -630,6 +772,7 @@ export default function CoffreApp({ session }) {
             onRemoveRef={removeRef}
             onUpdateRefColor={updateRefColor}
             onUpdateRefEmoji={updateRefEmoji}
+            onUpdateFamilyMemberBirthdate={updateFamilyMemberBirthdate}
             onImportContacts={importContacts}
           />
         )}
@@ -702,15 +845,25 @@ function QuickDialItem({ contact }) {
   );
 }
 function QuickDialSection({ title, icon: Icon, contacts, accent }) {
+  const [open, setOpen] = useState(false);
   if (contacts.length === 0) return null;
   return (
-    <div className="mb-2">
-      <p className={`px-2 mb-1 text-[11px] font-medium uppercase tracking-wide text-stone-400 flex items-center gap-1.5`}>
-        <Icon size={12} className={accent} /> {title}
-      </p>
-      <div>
-        {contacts.map((c) => <QuickDialItem key={c.id} contact={c} />)}
-      </div>
+    <div className="mb-1">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center gap-1.5 px-2 py-1 text-[11px] font-medium uppercase tracking-wide text-stone-400 hover:bg-stone-200 rounded-md"
+      >
+        <Icon size={12} className={accent} />
+        <span className="flex-1 text-left">{title}</span>
+        <span className="text-stone-400">({contacts.length})</span>
+        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+      </button>
+      {open && (
+        <div className="mt-0.5">
+          {contacts.map((c) => <QuickDialItem key={c.id} contact={c} />)}
+        </div>
+      )}
     </div>
   );
 }
@@ -1367,7 +1520,7 @@ function EmojiPicker({ value, onChange, options }) {
   );
 }
 
-function RefListEditor({ title, description, items, placeholder, withColor, withEmoji, emojiOptions, onAdd, onUpdate, onUpdateColor, onUpdateEmoji, onRemove, blockedMessage }) {
+function RefListEditor({ title, description, items, placeholder, withColor, withEmoji, emojiOptions, withDate, onAdd, onUpdate, onUpdateColor, onUpdateEmoji, onUpdateDate, onRemove, blockedMessage }) {
   const [newName, setNewName] = useState("");
   const [newColor, setNewColor] = useState(PALETTE[0]);
   const [newEmoji, setNewEmoji] = useState("");
@@ -1390,6 +1543,15 @@ function RefListEditor({ title, description, items, placeholder, withColor, with
               className="flex-1 min-w-0 px-2 py-1 rounded border border-stone-200 text-sm focus:outline-none focus:ring-2 focus:ring-stone-400"
             />
             {withColor && <ColorPicker value={it.color || "stone"} onChange={(color) => onUpdateColor(it.id, color)} />}
+            {withDate && (
+              <input
+                type="date"
+                value={it.date_naissance || ""}
+                onChange={(e) => onUpdateDate(it.id, e.target.value)}
+                title="Date de naissance"
+                className="px-2 py-1 rounded border border-stone-200 text-xs text-stone-600 focus:outline-none focus:ring-2 focus:ring-stone-400"
+              />
+            )}
             <button
               onClick={async () => {
                 const ok = await onRemove(it.id);
@@ -1596,7 +1758,7 @@ function ImportContactsPanel({ contactTypes, familyMembers, onImportContacts }) 
   );
 }
 
-function CoffreSettingsTab({ familyMembers, contactTypes, activities, documentTypes, contacts, documents, onAddRef, onAddColoredRef, onUpdateRef, onRemoveRef, onUpdateRefColor, onUpdateRefEmoji, onImportContacts }) {
+function CoffreSettingsTab({ familyMembers, contactTypes, activities, documentTypes, contacts, documents, onAddRef, onAddColoredRef, onUpdateRef, onRemoveRef, onUpdateRefColor, onUpdateRefEmoji, onUpdateFamilyMemberBirthdate, onImportContacts }) {
   return (
     <div className="max-w-3xl mx-auto p-5 sm:p-8 space-y-6">
       <div>
@@ -1606,14 +1768,16 @@ function CoffreSettingsTab({ familyMembers, contactTypes, activities, documentTy
 
       <RefListEditor
         title="Membres de la famille"
-        description="Utilisés pour rattacher un contact ou un document à une personne (ou à « Général »). L'emoji, s'il est choisi, s'affiche partout devant le nom."
+        description="Utilisés pour rattacher un contact ou un document à une personne (ou à « Général »). L'emoji s'affiche partout devant le nom ; la date de naissance sert au calendrier vaccinal (onglet Santé)."
         items={familyMembers}
         placeholder="Prénom"
         withEmoji
         emojiOptions={FAMILY_EMOJI_OPTIONS}
+        withDate
         onAdd={(name, _color, emoji) => onAddRef("family_members", name, emoji)}
         onUpdate={(id, name) => onUpdateRef("family_members", id, name)}
         onUpdateEmoji={(id, emoji) => onUpdateRefEmoji("family_members", id, emoji)}
+        onUpdateDate={onUpdateFamilyMemberBirthdate}
         onRemove={(id) => onRemoveRef("family_members", id)}
         blockedMessage={(name) => `« ${name} » est encore utilisé par des contacts ou documents : réaffectez-les avant de le supprimer.`}
       />
@@ -1665,7 +1829,7 @@ function CoffreSettingsTab({ familyMembers, contactTypes, activities, documentTy
 
 /* ---------------------------- Événements ---------------------------- */
 
-function EventsTab({ contacts, documents, familyMemberById, documentTypeById, onGoToContacts }) {
+function EventsTab({ contacts, documents, familyMembers, vaccinations, familyMemberById, documentTypeById, onGoToContacts }) {
   const { start, end } = useMemo(() => eventsWindow(), []);
 
   const favoriteContacts = useMemo(() => contacts.filter((c) => c.favori), [contacts]);
@@ -1687,6 +1851,21 @@ function EventsTab({ contacts, documents, familyMemberById, documentTypeById, on
   }, [documents, start, end]);
 
   const periodLabel = `${new Intl.DateTimeFormat("fr-FR", { month: "long" }).format(start)} → ${new Intl.DateTimeFormat("fr-FR", { month: "long", year: "numeric" }).format(end)}`;
+
+  // Prochaine dose non pointée par membre/maladie, si dans les 3 prochains mois
+  // (ou déjà en retard) — repère indicatif, voir VACCINE_SCHEDULE.
+  const upcomingVaccines = useMemo(() => {
+    const items = [];
+    familyMembers.forEach((m) => {
+      if (!m.date_naissance) return;
+      const records = vaccinations.filter((v) => v.family_member_id === m.id);
+      VACCINE_SCHEDULE.forEach((entry) => {
+        const info = nextDueDoseInfo(entry, m.date_naissance, records);
+        if (info && info.monthsUntilDue <= 3) items.push({ member: m, ...info });
+      });
+    });
+    return items.sort((a, b) => a.monthsUntilDue - b.monthsUntilDue);
+  }, [familyMembers, vaccinations]);
 
   return (
     <div className="max-w-4xl mx-auto p-5 sm:p-8 space-y-6">
@@ -1722,6 +1901,28 @@ function EventsTab({ contacts, documents, familyMemberById, documentTypeById, on
       </div>
 
       <div className="bg-white rounded-lg border border-stone-200 p-4 space-y-3">
+        <h2 className="text-sm font-medium text-stone-700 flex items-center gap-1.5"><Syringe size={16} className="text-amber-500" /> Vaccinations à surveiller</h2>
+        {upcomingVaccines.length === 0 && (
+          <p className="text-sm text-stone-400">Aucune vaccination attendue ou en retard dans les 3 prochains mois (repère indicatif, voir l'onglet Santé).</p>
+        )}
+        {upcomingVaccines.map(({ member: m, entry, dose, monthsUntilDue }, i) => {
+          const overdue = monthsUntilDue < 0;
+          return (
+            <div key={`${m.id}-${entry.id}`} className="flex items-center gap-3 px-1 py-1.5 border-b border-stone-50 last:border-0">
+              <Syringe size={16} className={overdue ? "text-rose-500 shrink-0" : "text-stone-400 shrink-0"} />
+              <div className="min-w-0 flex-1">
+                <p className="text-sm text-stone-800 truncate">{entry.disease} <span className="text-stone-400">— {dose.label}</span></p>
+              </div>
+              <span className={`text-xs shrink-0 ${overdue ? "text-rose-600 font-medium" : "text-amber-600"}`}>
+                {overdue ? `En retard (${Math.abs(monthsUntilDue)} mois)` : monthsUntilDue === 0 ? "Ce mois-ci" : `Dans ${monthsUntilDue} mois`}
+              </span>
+              <span className="shrink-0"><MemberBadge member={m} /></span>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="bg-white rounded-lg border border-stone-200 p-4 space-y-3">
         <h2 className="text-sm font-medium text-stone-700 flex items-center gap-1.5"><AlertTriangle size={16} className="text-amber-500" /> Documents à renouveler</h2>
         {expiringDocs.length === 0 && (
           <p className="text-sm text-stone-400">Aucun document n'expire dans les 3 prochains mois.</p>
@@ -1751,8 +1952,10 @@ function EventsTab({ contacts, documents, familyMemberById, documentTypeById, on
 
 function HealthTab({ familyMembers, vaccinations, documents, documentTypes, onSaveVaccination, onDeleteVaccination, onImportVaccinations, onExtractHealthRecord, onSaveDocument }) {
   const [selectedMemberId, setSelectedMemberId] = useState(familyMembers[0]?.id || "");
+  const [healthView, setHealthView] = useState("calendrier"); // calendrier | carnet | detail
   const [editing, setEditing] = useState(null); // null fermé, {} nouveau, {...} édition
   const [importing, setImporting] = useState(false);
+  const selectedMember = familyMembers.find((m) => m.id === selectedMemberId) || null;
 
   useEffect(() => {
     if (!selectedMemberId && familyMembers[0]) setSelectedMemberId(familyMembers[0].id);
@@ -1819,6 +2022,33 @@ function HealthTab({ familyMembers, vaccinations, documents, documentTypes, onSa
         ))}
       </div>
 
+      <div className="flex gap-1 border-b border-stone-200">
+        {[
+          { key: "calendrier", label: "Calendrier" },
+          { key: "carnet", label: "Carnet de santé" },
+          { key: "detail", label: "Détail" },
+        ].map((v) => (
+          <button
+            key={v.key}
+            onClick={() => setHealthView(v.key)}
+            className={`px-3 py-2 text-sm border-b-2 -mb-px ${
+              healthView === v.key ? "border-blue-950 text-blue-950 font-medium" : "border-transparent text-stone-500 hover:text-stone-700"
+            }`}
+          >
+            {v.label}
+          </button>
+        ))}
+      </div>
+
+      {healthView === "calendrier" && selectedMember && (
+        <VaccineCalendarView member={selectedMember} vaccinations={vaccinations} />
+      )}
+
+      {healthView === "carnet" && selectedMember && (
+        <HealthBookletView member={selectedMember} vaccinations={memberVaccinations} />
+      )}
+
+      {healthView === "detail" && (
       <div className="bg-white rounded-lg border border-stone-200 divide-y divide-stone-100 overflow-hidden">
         {memberVaccinations.length === 0 && (
           <p className="text-sm text-stone-400 py-8 text-center">Aucune vaccination enregistrée pour ce membre.</p>
@@ -1843,6 +2073,7 @@ function HealthTab({ familyMembers, vaccinations, documents, documentTypes, onSa
           </div>
         ))}
       </div>
+      )}
 
       {editing !== null && (
         <VaccinationEditor
@@ -1870,6 +2101,162 @@ function HealthTab({ familyMembers, vaccinations, documents, documentTypes, onSa
           onDone={() => setImporting(false)}
         />
       )}
+    </div>
+  );
+}
+
+// Vue "Calendrier" : une ligne par maladie du référentiel, une colonne par
+// âge repère, une pastille verte/rouge indicative, et le détail au clic sur
+// le nom de la maladie.
+function VaccineCalendarView({ member, vaccinations }) {
+  const [openRow, setOpenRow] = useState(null);
+  const records = useMemo(() => vaccinations.filter((v) => v.family_member_id === member.id), [vaccinations, member.id]);
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-stone-600 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+        Repère indicatif basé sur le calendrier vaccinal général — à confirmer avec le pédiatre et le carnet officiel. Cliquez sur le nom d'une maladie pour le détail.
+      </p>
+      {!member.date_naissance && (
+        <p className="text-xs text-rose-600">
+          Date de naissance de {memberLabel(member)} non renseignée : ajoutez-la dans Paramétrage pour activer les pastilles à jour/à faire.
+        </p>
+      )}
+      <div className="overflow-x-auto bg-white rounded-lg border border-stone-200">
+        <table className="min-w-full text-xs border-collapse">
+          <thead>
+            <tr className="bg-stone-50">
+              <th className="sticky left-0 z-10 bg-stone-50 text-left px-3 py-2 border-b border-r border-stone-200 min-w-[240px]">Vaccin</th>
+              <th className="px-2 py-2 border-b border-stone-200 whitespace-nowrap font-medium text-stone-500">Date de dernier vaccin</th>
+              {VACCINE_AGE_COLUMNS.map((c) => (
+                <th key={c.label} className="px-2 py-2 border-b border-stone-200 whitespace-nowrap font-medium text-stone-500">{c.label}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {VACCINE_SCHEDULE.map((entry) => {
+              const { status, matched } = vaccineEntryStatus(entry, member.date_naissance, records);
+              const lastDate = matched.length ? matched[matched.length - 1].date_administered : null;
+              const isOpen = openRow === entry.id;
+              const doseByMonths = {};
+              entry.doses.forEach((d, i) => (doseByMonths[d.months] = i));
+              return (
+                <React.Fragment key={entry.id}>
+                  <tr className="hover:bg-stone-50">
+                    <td className="sticky left-0 z-10 bg-white text-left px-3 py-2 border-b border-r border-stone-200">
+                      <button type="button" onClick={() => setOpenRow(isOpen ? null : entry.id)} className="flex items-center gap-2 text-left w-full">
+                        <span
+                          className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                            status === "a_jour" ? "bg-emerald-500" : status === "a_faire" ? "bg-rose-500" : "bg-stone-300"
+                          }`}
+                          title={status === "a_jour" ? "À jour" : status === "a_faire" ? "À faire" : "Pas encore concerné, ou date de naissance manquante"}
+                        />
+                        <span className="font-medium text-stone-700 flex-1">{entry.disease}</span>
+                        {isOpen ? <ChevronDown size={12} className="text-stone-400 shrink-0" /> : <ChevronRight size={12} className="text-stone-400 shrink-0" />}
+                      </button>
+                    </td>
+                    <td className="px-2 py-2 border-b border-stone-200 text-center whitespace-nowrap text-stone-500">
+                      {lastDate ? formatDateFR(lastDate) : "—"}
+                    </td>
+                    {VACCINE_AGE_COLUMNS.map((c) => {
+                      const doseIndex = doseByMonths[c.months];
+                      if (doseIndex === undefined) return <td key={c.label} className="px-2 py-2 border-b border-stone-200 bg-stone-50" />;
+                      const done = matched.length > doseIndex;
+                      return (
+                        <td key={c.label} className="px-2 py-2 border-b border-stone-200 text-center">
+                          {done ? <Check size={14} className="inline text-emerald-600" /> : <span className="text-stone-300">—</span>}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                  {isOpen && (
+                    <tr>
+                      <td colSpan={2 + VACCINE_AGE_COLUMNS.length} className="px-4 py-2 bg-stone-50 border-b border-stone-200 text-stone-600">
+                        {entry.description}
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// Vue "Carnet de santé" : reproduction à l'écran du carnet papier (couleurs
+// reprises d'un vrai carnet scanné), avec export PDF via l'impression du
+// navigateur (voir #carnet-print-area dans globals.css).
+function HealthBookletView({ member, vaccinations }) {
+  return (
+    <div className="space-y-3">
+      <div className="flex justify-end">
+        <button
+          onClick={() => window.print()}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md border border-stone-300 bg-white hover:bg-stone-100"
+        >
+          <Download size={14} /> Exporter en PDF
+        </button>
+      </div>
+      <p className="text-xs text-stone-400">
+        "Exporter en PDF" ouvre l'impression du navigateur : choisissez "Enregistrer en PDF" comme destination pour obtenir un fichier propre, sans le reste de l'application.
+      </p>
+
+      <div id="carnet-print-area" className="space-y-4">
+        <div className="bg-white rounded-lg border-2 overflow-hidden" style={{ borderColor: CARNET_TERRACOTTA }}>
+          <div className="px-4 py-3 flex items-center justify-between" style={{ backgroundColor: CARNET_MAUVE }}>
+            <span className="text-white font-serif text-lg tracking-wide">Carnet de vaccination</span>
+            <span className="text-white text-sm">{memberLabel(member)}</span>
+          </div>
+          <div className="p-4 space-y-5">
+            {VACCINE_SCHEDULE.map((entry) => {
+              const rows = vaccineEntryRecords(entry, vaccinations);
+              return (
+                <div key={entry.id} className="break-inside-avoid">
+                  <h3 className="font-serif text-base font-semibold mb-1.5" style={{ color: CARNET_TERRACOTTA }}>
+                    Vaccination : {entry.disease}
+                  </h3>
+                  <table className="w-full text-xs border-collapse">
+                    <thead>
+                      <tr>
+                        {["Date", "Vaccin", "Dose", "Lot", "Notes"].map((h) => (
+                          <th key={h} className="text-left px-2 py-1 border" style={{ borderColor: CARNET_TERRACOTTA, backgroundColor: "#FBF3ED" }}>
+                            {h}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.length === 0 ? (
+                        <tr>
+                          <td colSpan={5} className="px-2 py-2 border text-stone-400 italic" style={{ borderColor: CARNET_TERRACOTTA }}>
+                            Aucune donnée enregistrée
+                          </td>
+                        </tr>
+                      ) : (
+                        rows.map((v) => (
+                          <tr key={v.id}>
+                            <td className="px-2 py-1 border whitespace-nowrap" style={{ borderColor: CARNET_TERRACOTTA }}>{v.date_administered ? formatDateFR(v.date_administered) : "—"}</td>
+                            <td className="px-2 py-1 border" style={{ borderColor: CARNET_TERRACOTTA }}>{v.vaccine_name}</td>
+                            <td className="px-2 py-1 border" style={{ borderColor: CARNET_TERRACOTTA }}>{v.dose_label || "—"}</td>
+                            <td className="px-2 py-1 border font-mono" style={{ borderColor: CARNET_TERRACOTTA }}>{v.lot_number || "—"}</td>
+                            <td className="px-2 py-1 border" style={{ borderColor: CARNET_TERRACOTTA }}>{v.notes || ""}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })}
+          </div>
+          <div className="px-4 py-2 text-[11px] text-stone-400 border-t" style={{ borderColor: CARNET_TERRACOTTA }}>
+            Document généré depuis Coffre numérique — ne remplace pas le carnet de santé officiel.
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

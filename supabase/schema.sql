@@ -15,6 +15,7 @@ create table if not exists coffre.family_members (
   id uuid primary key default gen_random_uuid(),
   name text not null unique,
   emoji text,
+  date_naissance date,
   created_at timestamptz not null default now()
 );
 
