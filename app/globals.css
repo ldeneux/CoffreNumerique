@@ -9,6 +9,9 @@ body {
 /* Export "PDF" du carnet de santé : n'imprime que la zone du carnet,
    sans le menu ni le reste de l'application (voir HealthBookletView). */
 @media print {
+  @page {
+    margin: 12mm;
+  }
   body * {
     visibility: hidden;
   }

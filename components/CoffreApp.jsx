@@ -2416,7 +2416,7 @@ function HealthBookletView({ member, vaccinations }) {
         <div className="bg-white rounded-lg border-2 overflow-hidden" style={{ borderColor: CARNET_TERRACOTTA }}>
           <div className="px-4 py-3 flex items-center justify-between" style={{ backgroundColor: CARNET_MAUVE }}>
             <span className="text-white font-serif text-lg tracking-wide">Carnet de vaccination</span>
-            <span className="text-white text-sm">{memberLabel(member)}</span>
+            <span className="text-white text-sm">{member.name} DENEUX</span>
           </div>
           <div className="p-4 space-y-5">
             {VACCINE_SCHEDULE.map((entry) => {
@@ -2429,7 +2429,7 @@ function HealthBookletView({ member, vaccinations }) {
                   <table className="w-full text-xs border-collapse">
                     <thead>
                       <tr>
-                        {["Date", "Vaccin", "Dose", "Lot", "Notes"].map((h) => (
+                        {["Date", "Vaccin", "Lot"].map((h) => (
                           <th key={h} className="text-left px-2 py-1 border" style={{ borderColor: CARNET_TERRACOTTA, backgroundColor: "#FBF3ED" }}>
                             {h}
                           </th>
@@ -2439,7 +2439,7 @@ function HealthBookletView({ member, vaccinations }) {
                     <tbody>
                       {rows.length === 0 ? (
                         <tr>
-                          <td colSpan={5} className="px-2 py-2 border text-stone-400 italic" style={{ borderColor: CARNET_TERRACOTTA }}>
+                          <td colSpan={3} className="px-2 py-2 border text-stone-400 italic" style={{ borderColor: CARNET_TERRACOTTA }}>
                             Aucune donnée enregistrée
                           </td>
                         </tr>
@@ -2447,10 +2447,8 @@ function HealthBookletView({ member, vaccinations }) {
                         rows.map((v) => (
                           <tr key={v.id}>
                             <td className="px-2 py-1 border whitespace-nowrap" style={{ borderColor: CARNET_TERRACOTTA }}>{v.date_administered ? formatDateFR(v.date_administered) : "—"}</td>
-                            <td className="px-2 py-1 border" style={{ borderColor: CARNET_TERRACOTTA }}>{v.vaccine_name}</td>
-                            <td className="px-2 py-1 border" style={{ borderColor: CARNET_TERRACOTTA }}>{v.dose_label || "—"}</td>
+                            <td className="px-2 py-1 border" style={{ borderColor: CARNET_TERRACOTTA }}>{v.vaccine_name}{v.dose_label ? ` — ${v.dose_label}` : ""}</td>
                             <td className="px-2 py-1 border font-mono" style={{ borderColor: CARNET_TERRACOTTA }}>{v.lot_number || "—"}</td>
-                            <td className="px-2 py-1 border" style={{ borderColor: CARNET_TERRACOTTA }}>{v.notes || ""}</td>
                           </tr>
                         ))
                       )}
@@ -2461,7 +2459,7 @@ function HealthBookletView({ member, vaccinations }) {
             })}
           </div>
           <div className="px-4 py-2 text-[11px] text-stone-400 border-t" style={{ borderColor: CARNET_TERRACOTTA }}>
-            Document généré depuis Coffre numérique — ne remplace pas le carnet de santé officiel.
+            {formatDateFR(new Date().toISOString().slice(0, 10))}
           </div>
         </div>
       </div>
