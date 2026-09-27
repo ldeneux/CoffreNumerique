@@ -54,92 +54,243 @@ const DOCUMENT_EMOJI_OPTIONS = ["\u{1FAAA}", "\u{1F697}", "\u{1F698}", "\u{1F3E0
 // Couleurs reprises du carnet de santé (échantillonnées sur un vrai carnet
 // scanné) : terracotta des titres/bordures, mauve des bandeaux, vert des
 // pictogrammes. Utilisées pour la vue "Carnet de santé" de l'onglet Santé.
+// Couleurs reprises du carnet de santé (échantillonnées sur un vrai carnet
+// scanné) : terracotta des titres/bordures, mauve des bandeaux, vert des
+// pictogrammes. Utilisées pour la vue "Carnet de santé" de l'onglet Santé.
 const CARNET_TERRACOTTA = "#B36845";
 const CARNET_MAUVE = "#8E7A9F";
 const CARNET_GREEN = "#5FAE58";
 
-// Référentiel indicatif du calendrier vaccinal pédiatrique français courant
-// (schéma général : primo-vaccination 2/4/11 mois pour l'hexavalent et le
-// pneumocoque, ROR à 12 et 16-18 mois, méningocoque C à 5 et 12 mois, rappels
-// à 6 ans, 11-13 ans puis 25 ans). Sert de repère organisationnel dans
-// l'appli : à confirmer systématiquement avec le pédiatre et le carnet
-// officiel, ce n'est pas un avis médical et certains schémas varient selon
-// l'année de naissance ou des situations particulières.
+// Couleurs et repères vaccinaux échantillonnés directement sur le calendrier
+// vaccinal officiel fourni par l'utilisateur (carte "Vaccinations obligatoires
+// pour les nourrissons" + rappels enfant/ado/adulte). Sert de référentiel
+// pour la vue "Calendrier" de l'onglet Santé : repère organisationnel, à
+// confirmer avec le pédiatre et le carnet officiel, ce n'est pas un avis
+// médical, et certains schémas varient selon l'année de naissance.
+const VACCINE_COLORS = {
+  bannerBlue: "#70A8C7",
+  mandatoryZoneBg: "#CEDAE4",
+  defaultCellBg: "#E5E5E5",
+  bcg: "#AD5C9E",
+  dtpHib: "#71BBA0",
+  hepb: "#F5C644",
+  pink: "#E268A2",
+  ror: "#DE444D",
+  rotaDark: "#C59B60",
+  rotaLight: "#E2C8A4",
+  hpv: "#EA893A",
+  grippe: "#5FC4F2",
+  covid: "#544E9D",
+  zona: "#A36A59",
+  vrs: "#408E52",
+};
+
+// Toutes les colonnes d'âge du calendrier officiel, dans l'ordre.
+const VACCINE_AGE_COLUMNS = [
+  { key: "1m", label: "1 mois", months: 1 },
+  { key: "2m", label: "2 mois", months: 2 },
+  { key: "3m", label: "3 mois", months: 3 },
+  { key: "4m", label: "4 mois", months: 4 },
+  { key: "5m", label: "5 mois", months: 5 },
+  { key: "6m", label: "6 mois", months: 6 },
+  { key: "11m", label: "11 mois", months: 11 },
+  { key: "12m", label: "12 mois", months: 12 },
+  { key: "1618m", label: "16-18 mois", months: 17 },
+  { key: "6a", label: "6 ans", months: 72 },
+  { key: "1113a", label: "11-13 ans", months: 138 },
+  { key: "14a", label: "14 ans", months: 168 },
+  { key: "25a", label: "25 ans", months: 300 },
+  { key: "65a", label: "65 ans et +", months: 780 },
+];
+const vaccineColumnByKey = Object.fromEntries(VACCINE_AGE_COLUMNS.map((c) => [c.key, c]));
+
+// obligatoire: true = fait partie des 11 vaccins obligatoires pour les
+// nourrissons (encadré bleu du calendrier officiel) ; false = recommandé.
+// cells[].checkable: true = dose ponctuelle qu'on peut cocher à partir des
+// vaccinations enregistrées ; false = case informative (rappel récurrent
+// à l'âge adulte, dose optionnelle selon marque...), jamais cochée
+// automatiquement faute de suivi fiable possible.
 const VACCINE_SCHEDULE = [
   {
     id: "bcg",
     disease: "Tuberculose (BCG)",
+    color: VACCINE_COLORS.bcg,
+    obligatoire: false,
+    coverage: "Dose unique, protection prolongée",
     keywords: ["bcg", "tuberculeuse"],
-    description: "La vaccination contre la tuberculose est recommandée chez les enfants exposés à un risque élevé de tuberculose à partir de l'âge de 1 mois et jusqu'à 15 ans.",
-    doses: [{ label: "1 mois", months: 1 }],
+    description: "Recommandée chez les enfants exposés à un risque élevé de tuberculose, à partir de l'âge de 1 mois et jusqu'à 15 ans.",
+    cells: [{ key: "1m", checkable: true }],
   },
   {
-    id: "dtcaphib",
-    disease: "Diphtérie, Tétanos, Poliomyélite, Coqueluche, Hib",
-    keywords: ["infanrix", "hexyon", "pentavac", "tetravac", "dtpolio", "dtp", "coqueluche", "hexavalent", "haemophilus", "tetanos", "tétanos"],
-    description: "Primo-vaccination à 2 et 4 mois, rappel à 11 mois, puis nouveaux rappels à 6 ans, 11-13 ans et 25 ans (vaccin dTPolio/dTCaPolio à l'âge adulte).",
-    doses: [
-      { label: "2 mois", months: 2 },
-      { label: "4 mois", months: 4 },
-      { label: "11 mois", months: 11 },
-      { label: "6 ans", months: 72 },
-      { label: "11-13 ans", months: 138 },
-      { label: "25 ans", months: 300 },
+    id: "dtp",
+    disease: "DTP et Coqueluche",
+    color: VACCINE_COLORS.dtpHib,
+    obligatoire: true,
+    coverage: "Rappels à 6 ans, 11-13 ans, puis tous les 20 ans à partir de 25 ans et tous les 10 ans après 65 ans",
+    keywords: ["infanrix", "hexyon", "pentavac", "tetravac", "dtpolio", "dtp", "coqueluche", "hexavalent", "tetanos", "tétanos"],
+    description: "Primo-vaccination à 2 et 4 mois, rappel à 11 mois, puis à 6 ans, 11-13 ans, 25 ans et tous les 10 ans après 65 ans.",
+    cells: [
+      { key: "2m", checkable: true },
+      { key: "4m", checkable: true },
+      { key: "11m", checkable: true },
+      { key: "6a", checkable: true },
+      { key: "1113a", checkable: true },
+      { key: "25a", text: "Tous les 20 ans" },
+      { key: "65a", text: "Tous les 10 ans" },
+    ],
+  },
+  {
+    id: "hib",
+    disease: "Hib",
+    color: VACCINE_COLORS.dtpHib,
+    obligatoire: true,
+    coverage: "3 doses avant 1 an",
+    keywords: ["hib", "haemophilus", "infanrix", "hexyon", "pentavac", "tetravac", "hexavalent"],
+    description: "Protège contre les infections invasives à Haemophilus influenzae b (méningites, épiglottites...). Doses à 2, 4 et 11 mois, en général avec le vaccin hexavalent.",
+    cells: [
+      { key: "2m", checkable: true },
+      { key: "4m", checkable: true },
+      { key: "11m", checkable: true },
     ],
   },
   {
     id: "hepb",
     disease: "Hépatite B",
+    color: VACCINE_COLORS.hepb,
+    obligatoire: true,
+    coverage: "3 doses avant 1 an",
     keywords: ["hepatite b", "hépatite b", "engerix", "hexavalent", "infanrix", "hexyon"],
-    description: "Trois doses à 2, 4 et 11 mois, le plus souvent incluses dans le vaccin hexavalent donné en même temps que le DTPolio/Coqueluche/Hib.",
-    doses: [
-      { label: "2 mois", months: 2 },
-      { label: "4 mois", months: 4 },
-      { label: "11 mois", months: 11 },
+    description: "Trois doses à 2, 4 et 11 mois, le plus souvent incluses dans le vaccin hexavalent donné en même temps que le DTP/Coqueluche/Hib.",
+    cells: [
+      { key: "2m", checkable: true },
+      { key: "4m", checkable: true },
+      { key: "11m", checkable: true },
     ],
   },
   {
     id: "pneumo",
     disease: "Pneumocoque",
+    color: VACCINE_COLORS.pink,
+    obligatoire: true,
+    coverage: "3 doses avant 1 an ; rappel parfois recommandé après 65 ans",
     keywords: ["prevenar", "pneumocoque"],
-    description: "Trois doses à 2, 4 et 11 mois pour protéger contre les infections invasives à pneumocoque (méningites, pneumonies...).",
-    doses: [
-      { label: "2 mois", months: 2 },
-      { label: "4 mois", months: 4 },
-      { label: "11 mois", months: 11 },
+    description: "Trois doses à 2, 4 et 11 mois pour protéger contre les infections invasives à pneumocoque (méningites, pneumonies...). Peut aussi être recommandé après 65 ans selon les facteurs de risque.",
+    cells: [
+      { key: "2m", checkable: true },
+      { key: "4m", checkable: true },
+      { key: "11m", checkable: true },
+      { key: "65a" },
     ],
   },
   {
     id: "ror",
-    disease: "Rougeole, Oreillons, Rubéole (ROR)",
+    disease: "ROR",
+    color: VACCINE_COLORS.ror,
+    obligatoire: true,
+    coverage: "2 doses, protection considérée acquise à vie",
     keywords: ["ror", "priorix", "rougeole"],
-    description: "Une première dose à 12 mois, une seconde entre 16 et 18 mois.",
-    doses: [
-      { label: "12 mois", months: 12 },
-      { label: "16-18 mois", months: 17 },
+    description: "Rougeole, Oreillons, Rubéole : une première dose à 12 mois, une seconde entre 16 et 18 mois.",
+    cells: [
+      { key: "12m", checkable: true },
+      { key: "1618m", checkable: true },
     ],
   },
   {
-    id: "menc",
-    disease: "Méningocoque (C, et ACWY/B selon recommandations)",
-    keywords: ["neisvac", "menveo", "meningocoque", "méningocoque", "bexsero", "meisvac"],
-    description: "Schéma méningocoque C : une dose à 5 mois, rappel à 12 mois. Des recommandations élargies (ACWY, B) existent selon l'âge, l'année de naissance et les facteurs de risque — à voir avec le pédiatre.",
-    doses: [
-      { label: "5 mois", months: 5 },
-      { label: "12 mois", months: 12 },
+    id: "menacwy",
+    disease: "Méningocoques ACWY",
+    color: VACCINE_COLORS.pink,
+    obligatoire: true,
+    coverage: "Doses à 6 et 12 mois, rappel à 11-13 ans",
+    keywords: ["menveo", "meningocoque acwy", "méningocoque acwy", "nimenrix"],
+    description: "Protège contre les infections invasives à méningocoques des sérogroupes A, C, W, Y. Doses à 6 et 12 mois, rappel à 11-13 ans (rattrapage possible jusqu'à 24 ans).",
+    cells: [
+      { key: "6m", checkable: true },
+      { key: "12m", checkable: true },
+      { key: "1113a", checkable: true },
     ],
   },
+  {
+    id: "menb",
+    disease: "Méningocoque B",
+    color: VACCINE_COLORS.pink,
+    obligatoire: true,
+    coverage: "3 doses avant 1 an (schéma 3-5-12 mois)",
+    keywords: ["bexsero", "meningocoque b", "méningocoque b"],
+    description: "Protège contre les infections invasives à méningocoque du sérogroupe B. Schéma à 3, 5 et 12 mois.",
+    cells: [
+      { key: "3m", checkable: true },
+      { key: "5m", checkable: true },
+      { key: "12m", checkable: true },
+    ],
+  },
+  {
+    id: "rotavirus",
+    disease: "Rotavirus",
+    color: VACCINE_COLORS.rotaDark,
+    obligatoire: false,
+    coverage: "2 ou 3 doses selon le vaccin utilisé, avant 6 mois",
+    keywords: ["rotavirus", "rotarix", "rotateq"],
+    description: "Protège contre les gastro-entérites sévères à rotavirus chez le nourrisson. Recommandé (non obligatoire) à 2 et 3 mois ; une 3e dose à 4 mois existe selon le vaccin utilisé.",
+    cells: [
+      { key: "2m", checkable: true },
+      { key: "3m", checkable: true },
+      { key: "4m", color: VACCINE_COLORS.rotaLight },
+    ],
+  },
+  {
+    id: "hpv",
+    disease: "HPV (papillomavirus)",
+    color: VACCINE_COLORS.hpv,
+    obligatoire: false,
+    coverage: "2 doses entre 11 et 14 ans (rattrapage possible jusqu'à 19 ans)",
+    keywords: ["hpv", "gardasil", "papillomavirus"],
+    description: "Recommandé entre 11 et 14 ans (filles et garçons), avec un rattrapage possible jusqu'à 19 ans révolus.",
+    cells: [
+      { key: "1113a", checkable: true },
+      { key: "14a" },
+    ],
+  },
+  {
+    id: "grippe",
+    disease: "Grippe",
+    color: VACCINE_COLORS.grippe,
+    obligatoire: false,
+    coverage: "Chaque année, notamment après 65 ans ou en cas de facteur de risque",
+    keywords: ["grippe", "influvac", "vaxigrip", "efluelda"],
+    description: "Recommandée chaque année, en particulier après 65 ans ou en présence de facteurs de risque (maladie chronique, grossesse...).",
+    cells: [{ key: "65a", text: "Tous les ans" }],
+  },
+  {
+    id: "covid",
+    disease: "Covid-19",
+    color: VACCINE_COLORS.covid,
+    obligatoire: false,
+    coverage: "Selon les campagnes annuelles, notamment après 65 ans",
+    keywords: ["covid", "comirnaty", "spikevax"],
+    description: "Recommandée selon les campagnes de vaccination en vigueur, en particulier après 65 ans ou en cas de facteur de risque.",
+    cells: [{ key: "65a", text: "Tous les ans" }],
+  },
+  {
+    id: "zona",
+    disease: "Zona",
+    color: VACCINE_COLORS.zona,
+    obligatoire: false,
+    coverage: "Recommandé à partir de 65 ans",
+    keywords: ["zona", "shingrix"],
+    description: "Recommandé à partir de 65 ans pour réduire le risque de zona et de ses complications (douleurs post-zostériennes).",
+    cells: [{ key: "65a" }],
+  },
+  {
+    id: "vrs",
+    disease: "VRS",
+    color: VACCINE_COLORS.vrs,
+    obligatoire: false,
+    coverage: "Nourrissons (via la mère enceinte ou après la naissance), ou personnes de 75 ans et plus",
+    keywords: ["vrs", "beyfortus", "abrysvo"],
+    description: "Les nourrissons doivent être immunisés contre le VRS soit par vaccination de la mère enceinte, soit par un anticorps après la naissance. Recommandé aussi à partir de 75 ans.",
+    cells: [{ key: "65a", text: "75 ans et +" }],
+  },
 ];
-
-// Toutes les colonnes d'âge utilisées par au moins un vaccin du référentiel,
-// dans l'ordre chronologique — sert d'en-têtes de colonnes au calendrier.
-const VACCINE_AGE_COLUMNS = (() => {
-  const seen = new Map();
-  VACCINE_SCHEDULE.forEach((entry) => entry.doses.forEach((d) => seen.set(d.months, d.label)));
-  return Array.from(seen.entries())
-    .sort((a, b) => a[0] - b[0])
-    .map(([months, label]) => ({ months, label }));
-})();
 
 // Nombre de mois entre une date de naissance (AAAA-MM-JJ) et une date donnée.
 function monthsBetween(birthdateISO, toDate) {
@@ -164,11 +315,18 @@ function vaccineEntryRecords(entry, records) {
     .slice()
     .sort((a, b) => (a.date_administered || "").localeCompare(b.date_administered || ""));
 }
+// Cases "cochables" d'un vaccin (doses ponctuelles suivies personnellement),
+// avec leur âge en mois résolu depuis la colonne correspondante.
+function vaccineCheckableCells(entry) {
+  return entry.cells.filter((c) => c.checkable).map((c) => ({ ...c, months: vaccineColumnByKey[c.key].months }));
+}
 function vaccineEntryStatus(entry, birthdateISO, records) {
   const matched = vaccineEntryRecords(entry, records);
+  const checkable = vaccineCheckableCells(entry);
+  if (checkable.length === 0) return { status: "inconnu", matched };
   const ageMonths = monthsBetween(birthdateISO, new Date());
   if (ageMonths === null) return { status: "inconnu", matched };
-  const dueDoses = entry.doses.filter((d) => d.months <= ageMonths);
+  const dueDoses = checkable.filter((c) => c.months <= ageMonths);
   if (dueDoses.length === 0) return { status: "pas_encore", matched };
   if (matched.length >= dueDoses.length) return { status: "a_jour", matched };
   return { status: "a_faire", matched };
@@ -176,12 +334,14 @@ function vaccineEntryStatus(entry, birthdateISO, records) {
 // Prochaine dose non pointée et son délai en mois (négatif = en retard).
 // Utilisé par l'onglet Événements pour signaler ce qui approche ou est dépassé.
 function nextDueDoseInfo(entry, birthdateISO, records) {
+  const checkable = vaccineCheckableCells(entry);
+  if (checkable.length === 0) return null;
   const ageMonths = monthsBetween(birthdateISO, new Date());
   if (ageMonths === null) return null;
   const matched = vaccineEntryRecords(entry, records);
-  const nextDose = entry.doses[matched.length];
-  if (!nextDose) return null;
-  return { entry, dose: nextDose, monthsUntilDue: nextDose.months - ageMonths };
+  const next = checkable[matched.length];
+  if (!next) return null;
+  return { entry, dose: { label: vaccineColumnByKey[next.key].label }, monthsUntilDue: next.months - ageMonths };
 }
 const SWATCH_BG = {
   blue: "bg-blue-500",
@@ -2108,71 +2268,118 @@ function HealthTab({ familyMembers, vaccinations, documents, documentTypes, onSa
 // Vue "Calendrier" : une ligne par maladie du référentiel, une colonne par
 // âge repère, une pastille verte/rouge indicative, et le détail au clic sur
 // le nom de la maladie.
+// Vue "Calendrier" : reproduit les couleurs et la structure du calendrier
+// vaccinal officiel (une ligne par maladie, une colonne par âge repère),
+// avec un filtre Obligatoire/Recommandé et une personnalisation par-dessus
+// (case cochée quand une vaccination enregistrée y correspond).
 function VaccineCalendarView({ member, vaccinations }) {
   const [openRow, setOpenRow] = useState(null);
+  const [filter, setFilter] = useState("toutes"); // toutes | obligatoire | recommandee
   const records = useMemo(() => vaccinations.filter((v) => v.family_member_id === member.id), [vaccinations, member.id]);
+  const rows = VACCINE_SCHEDULE.filter((entry) => {
+    if (filter === "obligatoire") return entry.obligatoire;
+    if (filter === "recommandee") return !entry.obligatoire;
+    return true;
+  });
 
   return (
     <div className="space-y-3">
-      <p className="text-xs text-stone-600 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
-        Repère indicatif basé sur le calendrier vaccinal général — à confirmer avec le pédiatre et le carnet officiel. Cliquez sur le nom d'une maladie pour le détail.
-      </p>
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <p className="text-xs text-stone-500">Cliquez sur le nom d'une maladie pour le détail. Repère indicatif, à confirmer avec le pédiatre.</p>
+        <div className="flex gap-1">
+          {[
+            { key: "toutes", label: "Toutes" },
+            { key: "obligatoire", label: "Obligatoires" },
+            { key: "recommandee", label: "Recommandées" },
+          ].map((f) => (
+            <button
+              key={f.key}
+              onClick={() => setFilter(f.key)}
+              className={`px-2.5 py-1 rounded-full text-xs border ${
+                filter === f.key ? "bg-blue-950 text-white border-blue-950" : "bg-white text-stone-600 border-stone-300 hover:bg-stone-100"
+              }`}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+      </div>
       {!member.date_naissance && (
         <p className="text-xs text-rose-600">
           Date de naissance de {memberLabel(member)} non renseignée : ajoutez-la dans Paramétrage pour activer les pastilles à jour/à faire.
         </p>
       )}
       <div className="overflow-x-auto bg-white rounded-lg border border-stone-200">
-        <table className="min-w-full text-xs border-collapse">
+        <table className="border-collapse w-full">
           <thead>
-            <tr className="bg-stone-50">
-              <th className="sticky left-0 z-10 bg-stone-50 text-left px-3 py-2 border-b border-r border-stone-200 min-w-[240px]">Vaccin</th>
-              <th className="px-2 py-2 border-b border-stone-200 whitespace-nowrap font-medium text-stone-500">Date de dernier vaccin</th>
+            <tr>
+              <th className="sticky left-0 z-10 bg-stone-50 text-left px-3 py-2 border-b border-r border-stone-200 min-w-[180px] align-bottom text-xs font-medium text-stone-500">
+                Vaccin
+              </th>
               {VACCINE_AGE_COLUMNS.map((c) => (
-                <th key={c.label} className="px-2 py-2 border-b border-stone-200 whitespace-nowrap font-medium text-stone-500">{c.label}</th>
+                <th key={c.key} className="border-b border-stone-200 align-bottom p-0" style={{ width: 30 }}>
+                  <div className="h-16 flex items-end justify-start pl-1 pb-1">
+                    <span className="inline-block origin-bottom-left -rotate-45 text-[10px] font-medium text-stone-500 whitespace-nowrap">
+                      {c.label}
+                    </span>
+                  </div>
+                </th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {VACCINE_SCHEDULE.map((entry) => {
+            {rows.map((entry) => {
               const { status, matched } = vaccineEntryStatus(entry, member.date_naissance, records);
               const lastDate = matched.length ? matched[matched.length - 1].date_administered : null;
               const isOpen = openRow === entry.id;
-              const doseByMonths = {};
-              entry.doses.forEach((d, i) => (doseByMonths[d.months] = i));
+              const cellByKey = Object.fromEntries(entry.cells.map((c) => [c.key, c]));
+              let checkableSeen = 0;
               return (
                 <React.Fragment key={entry.id}>
-                  <tr className="hover:bg-stone-50">
-                    <td className="sticky left-0 z-10 bg-white text-left px-3 py-2 border-b border-r border-stone-200">
-                      <button type="button" onClick={() => setOpenRow(isOpen ? null : entry.id)} className="flex items-center gap-2 text-left w-full">
+                  <tr>
+                    <td
+                      className="sticky left-0 z-10 text-left px-3 py-2 border-b border-r border-stone-200"
+                      style={{ backgroundColor: entry.color }}
+                    >
+                      <button type="button" onClick={() => setOpenRow(isOpen ? null : entry.id)} className="flex items-center gap-1.5 text-left w-full">
                         <span
-                          className={`w-2.5 h-2.5 rounded-full shrink-0 ${
-                            status === "a_jour" ? "bg-emerald-500" : status === "a_faire" ? "bg-rose-500" : "bg-stone-300"
+                          className={`w-2 h-2 rounded-full shrink-0 ring-1 ring-white/60 ${
+                            status === "a_jour" ? "bg-emerald-400" : status === "a_faire" ? "bg-rose-100" : "bg-white/40"
                           }`}
-                          title={status === "a_jour" ? "À jour" : status === "a_faire" ? "À faire" : "Pas encore concerné, ou date de naissance manquante"}
+                          title={status === "a_jour" ? "À jour" : status === "a_faire" ? "À faire" : "Pas de suivi personnalisé pour ce vaccin"}
                         />
-                        <span className="font-medium text-stone-700 flex-1">{entry.disease}</span>
-                        {isOpen ? <ChevronDown size={12} className="text-stone-400 shrink-0" /> : <ChevronRight size={12} className="text-stone-400 shrink-0" />}
+                        <span className="font-semibold text-white [text-shadow:0_1px_2px_rgba(0,0,0,0.45)] flex-1 text-xs leading-tight">
+                          {entry.disease}
+                        </span>
+                        {isOpen ? <ChevronDown size={12} className="text-white shrink-0" /> : <ChevronRight size={12} className="text-white/80 shrink-0" />}
                       </button>
                     </td>
-                    <td className="px-2 py-2 border-b border-stone-200 text-center whitespace-nowrap text-stone-500">
-                      {lastDate ? formatDateFR(lastDate) : "—"}
-                    </td>
                     {VACCINE_AGE_COLUMNS.map((c) => {
-                      const doseIndex = doseByMonths[c.months];
-                      if (doseIndex === undefined) return <td key={c.label} className="px-2 py-2 border-b border-stone-200 bg-stone-50" />;
-                      const done = matched.length > doseIndex;
+                      const cell = cellByKey[c.key];
+                      if (!cell) return <td key={c.key} className="border-b border-stone-200" style={{ backgroundColor: VACCINE_COLORS.defaultCellBg }} />;
+                      const idx = cell.checkable ? checkableSeen++ : -1;
+                      const done = cell.checkable && matched.length > idx;
                       return (
-                        <td key={c.label} className="px-2 py-2 border-b border-stone-200 text-center">
-                          {done ? <Check size={14} className="inline text-emerald-600" /> : <span className="text-stone-300">—</span>}
+                        <td
+                          key={c.key}
+                          className="border-b border-stone-200 text-center align-middle p-0.5"
+                          style={{ backgroundColor: cell.color || entry.color }}
+                        >
+                          {cell.text ? (
+                            <span className="text-[9px] font-medium text-white leading-tight block [text-shadow:0_1px_1px_rgba(0,0,0,0.4)]">{cell.text}</span>
+                          ) : done ? (
+                            <Check size={13} className="inline text-white" strokeWidth={3} />
+                          ) : null}
                         </td>
                       );
                     })}
                   </tr>
                   {isOpen && (
                     <tr>
-                      <td colSpan={2 + VACCINE_AGE_COLUMNS.length} className="px-4 py-2 bg-stone-50 border-b border-stone-200 text-stone-600">
-                        {entry.description}
+                      <td colSpan={1 + VACCINE_AGE_COLUMNS.length} className="px-4 py-3 bg-stone-50 border-b border-stone-200 text-stone-600 text-xs space-y-1">
+                        <p><span className="font-medium text-stone-700">Durée de protection : </span>{entry.coverage}</p>
+                        <p>{entry.description}</p>
+                        <p className="text-stone-400">Dernière vaccination enregistrée : {lastDate ? formatDateFR(lastDate) : "aucune"}</p>
                       </td>
                     </tr>
                   )}
@@ -2185,6 +2392,7 @@ function VaccineCalendarView({ member, vaccinations }) {
     </div>
   );
 }
+
 
 // Vue "Carnet de santé" : reproduction à l'écran du carnet papier (couleurs
 // reprises d'un vrai carnet scanné), avec export PDF via l'impression du
