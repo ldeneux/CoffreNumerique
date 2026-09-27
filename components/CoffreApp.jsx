@@ -32,6 +32,14 @@ import {
   PartyPopper,
 } from "lucide-react";
 import { supabase, DOCUMENTS_BUCKET } from "../lib/supabaseClient";
+import {
+  Document as PdfDocument,
+  Page as PdfPage,
+  Text as PdfText,
+  View as PdfView,
+  StyleSheet as PdfStyleSheet,
+  pdf as buildPdf,
+} from "@react-pdf/renderer";
 import { parseVCardFile } from "../lib/vcard";
 
 const GENERAL_LABEL = "Général";
@@ -2397,22 +2405,135 @@ function VaccineCalendarView({ member, vaccinations }) {
 // Vue "Carnet de santé" : reproduction à l'écran du carnet papier (couleurs
 // reprises d'un vrai carnet scanné), avec export PDF via l'impression du
 // navigateur (voir #carnet-print-area dans globals.css).
+// Styles du vrai PDF (react-pdf) — indépendants du CSS de l'appli, avec les
+// mêmes couleurs que la prévisualisation à l'écran.
+const PDF_STYLES = PdfStyleSheet.create({
+  page: { padding: 28, fontSize: 9, fontFamily: "Helvetica" },
+  header: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    backgroundColor: CARNET_MAUVE,
+    color: "#FFFFFF",
+    padding: 10,
+    marginBottom: 14,
+    borderRadius: 3,
+  },
+  title: { fontSize: 13, fontFamily: "Helvetica-Bold" },
+  name: { fontSize: 10 },
+  section: { marginBottom: 12 },
+  sectionTitle: { fontSize: 10, color: CARNET_TERRACOTTA, fontFamily: "Helvetica-Bold", marginBottom: 3 },
+  table: { borderWidth: 1, borderColor: CARNET_TERRACOTTA },
+  row: { flexDirection: "row" },
+  cellHeader: {
+    padding: 4,
+    backgroundColor: "#FBF3ED",
+    borderRightWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: CARNET_TERRACOTTA,
+    fontFamily: "Helvetica-Bold",
+  },
+  cell: { padding: 4, borderRightWidth: 1, borderBottomWidth: 1, borderColor: CARNET_TERRACOTTA },
+  cellDate: { width: 70 },
+  cellVaccin: { flex: 1 },
+  cellLot: { width: 90, fontFamily: "Courier" },
+  empty: { padding: 4, color: "#999999", fontStyle: "italic" },
+  pageNumber: { position: "absolute", bottom: 16, right: 28, fontSize: 8, color: "#999999" },
+});
+
+// Document réel (pas une capture d'écran) : pagination automatique gérée par
+// react-pdf via le "render" ci-dessous — c'est la seule chose ajoutée en bas
+// de page, rien d'autre (pas d'en-tête ni de pied de page du navigateur,
+// puisqu'on ne passe plus par l'impression).
+function HealthBookletDocument({ member, vaccinations }) {
+  return (
+    <PdfDocument>
+      <PdfPage size="A4" style={PDF_STYLES.page} wrap>
+        <PdfView style={PDF_STYLES.header}>
+          <PdfText style={PDF_STYLES.title}>Carnet de vaccination</PdfText>
+          <PdfText style={PDF_STYLES.name}>{member.name} DENEUX</PdfText>
+        </PdfView>
+        {VACCINE_SCHEDULE.map((entry) => {
+          const rows = vaccineEntryRecords(entry, vaccinations);
+          return (
+            <PdfView key={entry.id} style={PDF_STYLES.section} wrap={false}>
+              <PdfText style={PDF_STYLES.sectionTitle}>Vaccination : {entry.disease}</PdfText>
+              <PdfView style={PDF_STYLES.table}>
+                <PdfView style={PDF_STYLES.row}>
+                  <PdfText style={[PDF_STYLES.cellHeader, PDF_STYLES.cellDate]}>Date</PdfText>
+                  <PdfText style={[PDF_STYLES.cellHeader, PDF_STYLES.cellVaccin]}>Vaccin</PdfText>
+                  <PdfText style={[PDF_STYLES.cellHeader, PDF_STYLES.cellLot, { borderRightWidth: 0 }]}>Lot</PdfText>
+                </PdfView>
+                {rows.length === 0 ? (
+                  <PdfText style={PDF_STYLES.empty}>Aucune donnée enregistrée</PdfText>
+                ) : (
+                  rows.map((v) => (
+                    <PdfView style={PDF_STYLES.row} key={v.id}>
+                      <PdfText style={[PDF_STYLES.cell, PDF_STYLES.cellDate]}>
+                        {v.date_administered ? formatDateFR(v.date_administered) : "—"}
+                      </PdfText>
+                      <PdfText style={[PDF_STYLES.cell, PDF_STYLES.cellVaccin]}>
+                        {v.vaccine_name}{v.dose_label ? ` — ${v.dose_label}` : ""}
+                      </PdfText>
+                      <PdfText style={[PDF_STYLES.cell, PDF_STYLES.cellLot, { borderRightWidth: 0 }]}>
+                        {v.lot_number || "—"}
+                      </PdfText>
+                    </PdfView>
+                  ))
+                )}
+              </PdfView>
+            </PdfView>
+          );
+        })}
+        <PdfText
+          style={PDF_STYLES.pageNumber}
+          fixed
+          render={({ pageNumber, totalPages }) => `${pageNumber} / ${totalPages}`}
+        />
+      </PdfPage>
+    </PdfDocument>
+  );
+}
+
 function HealthBookletView({ member, vaccinations }) {
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState("");
+
+  async function handleExport() {
+    setExporting(true);
+    setExportError("");
+    try {
+      const blob = await buildPdf(<HealthBookletDocument member={member} vaccinations={vaccinations} />).toBlob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `carnet-${normalizeStr(member.name)}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setExportError("La génération du PDF a échoué.");
+    } finally {
+      setExporting(false);
+    }
+  }
+
   return (
     <div className="space-y-3">
-      <div className="flex justify-end">
+      <div className="flex items-center justify-end gap-2">
+        {exportError && <span className="text-xs text-rose-600">{exportError}</span>}
         <button
-          onClick={() => window.print()}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md border border-stone-300 bg-white hover:bg-stone-100"
+          onClick={handleExport}
+          disabled={exporting}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md border border-stone-300 bg-white hover:bg-stone-100 disabled:opacity-60"
         >
-          <Download size={14} /> Exporter en PDF
+          {exporting ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+          {exporting ? "Génération..." : "Exporter en PDF"}
         </button>
       </div>
-      <p className="text-xs text-stone-400">
-        "Exporter en PDF" ouvre l'impression du navigateur : choisissez "Enregistrer en PDF" comme destination pour obtenir un fichier propre, sans le reste de l'application.
-      </p>
 
-      <div id="carnet-print-area" className="space-y-4">
+      <div className="space-y-4">
         <div className="bg-white rounded-lg border-2 overflow-hidden" style={{ borderColor: CARNET_TERRACOTTA }}>
           <div className="px-4 py-3 flex items-center justify-between" style={{ backgroundColor: CARNET_MAUVE }}>
             <span className="text-white font-serif text-lg tracking-wide">Carnet de vaccination</span>
@@ -2457,9 +2578,6 @@ function HealthBookletView({ member, vaccinations }) {
                 </div>
               );
             })}
-          </div>
-          <div className="px-4 py-2 text-[11px] text-stone-400 border-t" style={{ borderColor: CARNET_TERRACOTTA }}>
-            {formatDateFR(new Date().toISOString().slice(0, 10))}
           </div>
         </div>
       </div>
