@@ -2059,6 +2059,9 @@ function EventsTab({ contacts, documents, familyMembers, vaccinations, vaccineDi
     const dismissed = new Set(vaccineDismissals.map((d) => `${d.family_member_id}:${d.vaccine_id}`));
     familyMembers.forEach((m) => {
       if (!m.date_naissance) return;
+      // Alertes réservées aux mineurs : le référentiel est un calendrier de l'enfance.
+      const ageMonths = monthsBetween(m.date_naissance, new Date());
+      if (ageMonths === null || ageMonths >= 18 * 12) return;
       const records = vaccinations.filter((v) => v.family_member_id === m.id);
       VACCINE_SCHEDULE.forEach((entry) => {
         if (dismissed.has(`${m.id}:${entry.id}`)) return;
@@ -2103,7 +2106,7 @@ function EventsTab({ contacts, documents, familyMembers, vaccinations, vaccineDi
 
       <EventSection title="Vaccinations à surveiller" icon={Syringe} count={upcomingVaccines.length}>
         {upcomingVaccines.length === 0 && (
-          <p className="text-sm text-stone-400">Aucune vaccination attendue ou en retard dans les 3 prochains mois (repère indicatif, voir l'onglet Santé).</p>
+          <p className="text-sm text-stone-400">Aucune vaccination attendue ou en retard dans les 3 prochains mois pour les membres de moins de 18 ans (repère indicatif, voir l'onglet Santé).</p>
         )}
         {upcomingVaccines.map(({ member: m, entry, dose, monthsUntilDue }, i) => {
           const overdue = monthsUntilDue < 0;
