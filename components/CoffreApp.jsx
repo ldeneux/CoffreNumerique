@@ -504,12 +504,13 @@ export default function CoffreApp({ session }) {
   const [contacts, setContacts] = useState([]);
   const [documents, setDocuments] = useState([]);
   const [vaccinations, setVaccinations] = useState([]);
+  const [vaccineDismissals, setVaccineDismissals] = useState([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
 
   const fetchAll = useCallback(async () => {
     try {
-      const [{ data: fm }, { data: ct }, { data: ac }, { data: dt }, { data: cs }, { data: docs }, { data: vx }] = await Promise.all([
+      const [{ data: fm }, { data: ct }, { data: ac }, { data: dt }, { data: cs }, { data: docs }, { data: vx }, { data: vd }] = await Promise.all([
         supabase.from("family_members").select("*").order("name", { ascending: true }),
         supabase.from("contact_types").select("*").order("name", { ascending: true }),
         supabase.from("activities").select("*").order("name", { ascending: true }),
@@ -517,6 +518,7 @@ export default function CoffreApp({ session }) {
         supabase.from("contacts").select("*"),
         supabase.from("documents").select("*"),
         supabase.from("vaccinations").select("*"),
+        supabase.from("vaccine_alert_dismissals").select("*"),
       ]);
       setFamilyMembers(fm || []);
       setContactTypes(ct || []);
@@ -525,6 +527,7 @@ export default function CoffreApp({ session }) {
       setContacts(cs || []);
       setDocuments(docs || []);
       setVaccinations(vx || []);
+      setVaccineDismissals(vd || []);
       setErrorMsg("");
     } catch (e) {
       setErrorMsg("Impossible de charger les données. Vérifiez votre connexion.");
@@ -540,6 +543,7 @@ export default function CoffreApp({ session }) {
       .on("postgres_changes", { event: "*", schema: "coffre", table: "contacts" }, fetchAll)
       .on("postgres_changes", { event: "*", schema: "coffre", table: "documents" }, fetchAll)
       .on("postgres_changes", { event: "*", schema: "coffre", table: "vaccinations" }, fetchAll)
+      .on("postgres_changes", { event: "*", schema: "coffre", table: "vaccine_alert_dismissals" }, fetchAll)
       .on("postgres_changes", { event: "*", schema: "coffre", table: "family_members" }, fetchAll)
       .on("postgres_changes", { event: "*", schema: "coffre", table: "contact_types" }, fetchAll)
       .on("postgres_changes", { event: "*", schema: "coffre", table: "activities" }, fetchAll)
@@ -701,6 +705,15 @@ export default function CoffreApp({ session }) {
     if (error) { setErrorMsg("Impossible d'enregistrer cette vaccination."); return false; }
     fetchAll();
     return true;
+  }
+  // Coche/décoche "ne pas signaler" pour un vaccin d'un membre (mémorisé en base).
+  async function toggleVaccineDismissal(familyMemberId, vaccineId) {
+    const existing = vaccineDismissals.find((d) => d.family_member_id === familyMemberId && d.vaccine_id === vaccineId);
+    const { error } = existing
+      ? await supabase.from("vaccine_alert_dismissals").delete().eq("id", existing.id)
+      : await supabase.from("vaccine_alert_dismissals").insert({ family_member_id: familyMemberId, vaccine_id: vaccineId });
+    if (error) setErrorMsg("Impossible de modifier ce réglage.");
+    else fetchAll();
   }
   async function deleteVaccination(id) {
     const { error } = await supabase.from("vaccinations").delete().eq("id", id);
@@ -880,6 +893,7 @@ export default function CoffreApp({ session }) {
             documents={documents}
             familyMembers={familyMembers}
             vaccinations={vaccinations}
+            vaccineDismissals={vaccineDismissals}
             familyMemberById={familyMemberById}
             documentTypeById={documentTypeById}
             onGoToContacts={() => setActiveTab("contacts")}
@@ -916,6 +930,8 @@ export default function CoffreApp({ session }) {
           <HealthTab
             familyMembers={familyMembers}
             vaccinations={vaccinations}
+            vaccineDismissals={vaccineDismissals}
+            onToggleVaccineDismissal={toggleVaccineDismissal}
             documents={documents}
             documentTypes={documentTypes}
             onSaveVaccination={saveVaccination}
@@ -1997,7 +2013,23 @@ function CoffreSettingsTab({ familyMembers, contactTypes, activities, documentTy
 
 /* ---------------------------- Événements ---------------------------- */
 
-function EventsTab({ contacts, documents, familyMembers, vaccinations, familyMemberById, documentTypeById, onGoToContacts }) {
+// Bloc repliable de l'écran Événements : fermé par défaut, avec compteur.
+function EventSection({ title, icon: Icon, count, children }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="bg-white rounded-lg border border-stone-200">
+      <button type="button" onClick={() => setOpen((o) => !o)} className="w-full flex items-center gap-1.5 p-4 text-left">
+        <Icon size={16} className="text-amber-500" />
+        <span className="text-sm font-medium text-stone-700 flex-1">{title}</span>
+        <span className="text-xs text-stone-400">{count}</span>
+        {open ? <ChevronDown size={15} className="text-stone-400" /> : <ChevronRight size={15} className="text-stone-400" />}
+      </button>
+      {open && <div className="px-4 pb-4 space-y-3">{children}</div>}
+    </div>
+  );
+}
+
+function EventsTab({ contacts, documents, familyMembers, vaccinations, vaccineDismissals, familyMemberById, documentTypeById, onGoToContacts }) {
   const { start, end } = useMemo(() => eventsWindow(), []);
 
   const favoriteContacts = useMemo(() => contacts.filter((c) => c.favori), [contacts]);
@@ -2024,26 +2056,27 @@ function EventsTab({ contacts, documents, familyMembers, vaccinations, familyMem
   // (ou déjà en retard) — repère indicatif, voir VACCINE_SCHEDULE.
   const upcomingVaccines = useMemo(() => {
     const items = [];
+    const dismissed = new Set(vaccineDismissals.map((d) => `${d.family_member_id}:${d.vaccine_id}`));
     familyMembers.forEach((m) => {
       if (!m.date_naissance) return;
       const records = vaccinations.filter((v) => v.family_member_id === m.id);
       VACCINE_SCHEDULE.forEach((entry) => {
+        if (dismissed.has(`${m.id}:${entry.id}`)) return;
         const info = nextDueDoseInfo(entry, m.date_naissance, records);
         if (info && info.monthsUntilDue <= 3) items.push({ member: m, ...info });
       });
     });
     return items.sort((a, b) => a.monthsUntilDue - b.monthsUntilDue);
-  }, [familyMembers, vaccinations]);
+  }, [familyMembers, vaccinations, vaccineDismissals]);
 
   return (
     <div className="max-w-4xl mx-auto p-5 sm:p-8 space-y-6">
       <div>
         <h1 className="font-serif text-2xl text-blue-950 tracking-tight">Événements</h1>
-        <p className="text-stone-500 text-sm mt-1">Sur les 3 prochains mois ({periodLabel}) : anniversaires des favoris et documents à renouveler.</p>
+        <p className="text-stone-500 text-sm mt-1">Sur les 3 prochains mois ({periodLabel}) : anniversaires des favoris, vaccinations à surveiller et documents à renouveler.</p>
       </div>
 
-      <div className="bg-white rounded-lg border border-stone-200 p-4 space-y-3">
-        <h2 className="text-sm font-medium text-stone-700 flex items-center gap-1.5"><PartyPopper size={16} className="text-amber-500" /> Anniversaires</h2>
+      <EventSection title="Anniversaires" icon={PartyPopper} count={birthdays.length}>
         {favoriteContacts.length === 0 && (
           <p className="text-sm text-stone-400">
             Aucun contact en favori pour l'instant.{" "}
@@ -2066,10 +2099,9 @@ function EventsTab({ contacts, documents, familyMembers, vaccinations, familyMem
             </div>
           );
         })}
-      </div>
+      </EventSection>
 
-      <div className="bg-white rounded-lg border border-stone-200 p-4 space-y-3">
-        <h2 className="text-sm font-medium text-stone-700 flex items-center gap-1.5"><Syringe size={16} className="text-amber-500" /> Vaccinations à surveiller</h2>
+      <EventSection title="Vaccinations à surveiller" icon={Syringe} count={upcomingVaccines.length}>
         {upcomingVaccines.length === 0 && (
           <p className="text-sm text-stone-400">Aucune vaccination attendue ou en retard dans les 3 prochains mois (repère indicatif, voir l'onglet Santé).</p>
         )}
@@ -2088,10 +2120,9 @@ function EventsTab({ contacts, documents, familyMembers, vaccinations, familyMem
             </div>
           );
         })}
-      </div>
+      </EventSection>
 
-      <div className="bg-white rounded-lg border border-stone-200 p-4 space-y-3">
-        <h2 className="text-sm font-medium text-stone-700 flex items-center gap-1.5"><AlertTriangle size={16} className="text-amber-500" /> Documents à renouveler</h2>
+      <EventSection title="Documents à renouveler" icon={AlertTriangle} count={expiringDocs.length}>
         {expiringDocs.length === 0 && (
           <p className="text-sm text-stone-400">Aucun document n'expire dans les 3 prochains mois.</p>
         )}
@@ -2111,14 +2142,14 @@ function EventsTab({ contacts, documents, familyMembers, vaccinations, familyMem
             </div>
           );
         })}
-      </div>
+      </EventSection>
     </div>
   );
 }
 
 /* ---------------------------- Santé (carnet de vaccination) ---------------------------- */
 
-function HealthTab({ familyMembers, vaccinations, documents, documentTypes, onSaveVaccination, onDeleteVaccination, onImportVaccinations, onExtractHealthRecord, onSaveDocument }) {
+function HealthTab({ familyMembers, vaccinations, vaccineDismissals, onToggleVaccineDismissal, documents, documentTypes, onSaveVaccination, onDeleteVaccination, onImportVaccinations, onExtractHealthRecord, onSaveDocument }) {
   const [selectedMemberId, setSelectedMemberId] = useState(familyMembers[0]?.id || "");
   const [healthView, setHealthView] = useState("calendrier"); // calendrier | carnet | detail
   const [editing, setEditing] = useState(null); // null fermé, {} nouveau, {...} édition
@@ -2209,7 +2240,7 @@ function HealthTab({ familyMembers, vaccinations, documents, documentTypes, onSa
       </div>
 
       {healthView === "calendrier" && selectedMember && (
-        <VaccineCalendarView member={selectedMember} vaccinations={vaccinations} />
+        <VaccineCalendarView member={selectedMember} vaccinations={vaccinations} vaccineDismissals={vaccineDismissals} onToggleVaccineDismissal={onToggleVaccineDismissal} />
       )}
 
       {healthView === "carnet" && selectedMember && (
@@ -2280,10 +2311,14 @@ function HealthTab({ familyMembers, vaccinations, documents, documentTypes, onSa
 // vaccinal officiel (une ligne par maladie, une colonne par âge repère),
 // avec un filtre Obligatoire/Recommandé et une personnalisation par-dessus
 // (case cochée quand une vaccination enregistrée y correspond).
-function VaccineCalendarView({ member, vaccinations }) {
+function VaccineCalendarView({ member, vaccinations, vaccineDismissals, onToggleVaccineDismissal }) {
   const [openRow, setOpenRow] = useState(null);
   const [filter, setFilter] = useState("toutes"); // toutes | obligatoire | recommandee
   const records = useMemo(() => vaccinations.filter((v) => v.family_member_id === member.id), [vaccinations, member.id]);
+  const dismissedIds = useMemo(
+    () => new Set(vaccineDismissals.filter((d) => d.family_member_id === member.id).map((d) => d.vaccine_id)),
+    [vaccineDismissals, member.id]
+  );
   const rows = VACCINE_SCHEDULE.filter((entry) => {
     if (filter === "obligatoire") return entry.obligatoire;
     if (filter === "recommandee") return !entry.obligatoire;
@@ -2324,6 +2359,13 @@ function VaccineCalendarView({ member, vaccinations }) {
               <th className="sticky left-0 z-10 bg-stone-50 text-left px-3 py-2 border-b border-r border-stone-200 min-w-[180px] align-bottom text-xs font-medium text-stone-500">
                 Vaccin
               </th>
+              <th className="border-b border-stone-200 align-bottom p-0" style={{ width: 30 }}>
+                <div className="h-16 flex items-end justify-start pl-1 pb-1">
+                  <span className="inline-block origin-bottom-left -rotate-45 text-[10px] font-medium text-stone-500 whitespace-nowrap">
+                    Sans alerte
+                  </span>
+                </div>
+              </th>
               {VACCINE_AGE_COLUMNS.map((c) => (
                 <th key={c.key} className="border-b border-stone-200 align-bottom p-0" style={{ width: 30 }}>
                   <div className="h-16 flex items-end justify-start pl-1 pb-1">
@@ -2362,6 +2404,18 @@ function VaccineCalendarView({ member, vaccinations }) {
                         {isOpen ? <ChevronDown size={12} className="text-white shrink-0" /> : <ChevronRight size={12} className="text-white/80 shrink-0" />}
                       </button>
                     </td>
+                    <td className="border-b border-stone-200 text-center bg-stone-50">
+                      {vaccineCheckableCells(entry).length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => onToggleVaccineDismissal(member.id, entry.id)}
+                          title={dismissedIds.has(entry.id) ? "Ce vaccin n'est pas signalé dans Événements (cliquer pour le signaler à nouveau)" : "Cocher pour ne plus signaler ce vaccin dans Événements"}
+                          className="text-stone-500 hover:text-stone-700"
+                        >
+                          {dismissedIds.has(entry.id) ? <CheckSquare size={15} /> : <Square size={15} className="text-stone-300" />}
+                        </button>
+                      )}
+                    </td>
                     {VACCINE_AGE_COLUMNS.map((c) => {
                       const cell = cellByKey[c.key];
                       if (!cell) return <td key={c.key} className="border-b border-stone-200" style={{ backgroundColor: VACCINE_COLORS.defaultCellBg }} />;
@@ -2384,7 +2438,7 @@ function VaccineCalendarView({ member, vaccinations }) {
                   </tr>
                   {isOpen && (
                     <tr>
-                      <td colSpan={1 + VACCINE_AGE_COLUMNS.length} className="px-4 py-3 bg-stone-50 border-b border-stone-200 text-stone-600 text-xs space-y-1">
+                      <td colSpan={2 + VACCINE_AGE_COLUMNS.length} className="px-4 py-3 bg-stone-50 border-b border-stone-200 text-stone-600 text-xs space-y-1">
                         <p><span className="font-medium text-stone-700">Durée de protection : </span>{entry.coverage}</p>
                         <p>{entry.description}</p>
                         <p className="text-stone-400">Dernière vaccination enregistrée : {lastDate ? formatDateFR(lastDate) : "aucune"}</p>
@@ -2403,8 +2457,9 @@ function VaccineCalendarView({ member, vaccinations }) {
 
 
 // Vue "Carnet de santé" : reproduction à l'écran du carnet papier (couleurs
-// reprises d'un vrai carnet scanné), avec export PDF via l'impression du
-// navigateur (voir #carnet-print-area dans globals.css).
+// reprises d'un vrai carnet scanné), avec export PDF réel (react-pdf, voir
+// HealthBookletDocument plus bas) — un vrai fichier généré, pas une capture
+// de l'écran ni une impression du navigateur.
 // Styles du vrai PDF (react-pdf) — indépendants du CSS de l'appli, avec les
 // mêmes couleurs que la prévisualisation à l'écran.
 const PDF_STYLES = PdfStyleSheet.create({

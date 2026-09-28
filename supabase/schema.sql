@@ -98,6 +98,15 @@ create table if not exists coffre.vaccinations (
   created_at timestamptz not null default now()
 );
 
+-- Vaccins qu'on ne veut plus voir signalés dans Événements, par membre.
+create table if not exists coffre.vaccine_alert_dismissals (
+  id uuid primary key default gen_random_uuid(),
+  family_member_id uuid not null references coffre.family_members(id) on delete cascade,
+  vaccine_id text not null,
+  created_at timestamptz not null default now(),
+  unique (family_member_id, vaccine_id)
+);
+
 -- Sécurité : row level security activée sur toutes les tables.
 -- Seuls les comptes authentifiés (créés manuellement, voir README) peuvent lire/écrire.
 alter table coffre.family_members enable row level security;
@@ -107,6 +116,7 @@ alter table coffre.document_types enable row level security;
 alter table coffre.contacts enable row level security;
 alter table coffre.documents enable row level security;
 alter table coffre.vaccinations enable row level security;
+alter table coffre.vaccine_alert_dismissals enable row level security;
 
 create policy "authenticated can read family_members" on coffre.family_members for select using (auth.role() = 'authenticated');
 create policy "authenticated can write family_members" on coffre.family_members for insert with check (auth.role() = 'authenticated');
@@ -143,6 +153,11 @@ create policy "authenticated can write vaccinations" on coffre.vaccinations for 
 create policy "authenticated can update vaccinations" on coffre.vaccinations for update using (auth.role() = 'authenticated');
 create policy "authenticated can delete vaccinations" on coffre.vaccinations for delete using (auth.role() = 'authenticated');
 
+create policy "authenticated can read vaccine_alert_dismissals" on coffre.vaccine_alert_dismissals for select using (auth.role() = 'authenticated');
+create policy "authenticated can write vaccine_alert_dismissals" on coffre.vaccine_alert_dismissals for insert with check (auth.role() = 'authenticated');
+create policy "authenticated can update vaccine_alert_dismissals" on coffre.vaccine_alert_dismissals for update using (auth.role() = 'authenticated');
+create policy "authenticated can delete vaccine_alert_dismissals" on coffre.vaccine_alert_dismissals for delete using (auth.role() = 'authenticated');
+
 -- Active le temps réel (pour que tous les comptes voient les mises à jour instantanément)
 alter publication supabase_realtime add table coffre.family_members;
 alter publication supabase_realtime add table coffre.contact_types;
@@ -151,6 +166,7 @@ alter publication supabase_realtime add table coffre.document_types;
 alter publication supabase_realtime add table coffre.contacts;
 alter publication supabase_realtime add table coffre.documents;
 alter publication supabase_realtime add table coffre.vaccinations;
+alter publication supabase_realtime add table coffre.vaccine_alert_dismissals;
 
 -- Autorise les rôles de l'API à utiliser ce schéma (sans ça PostgREST refuse,
 -- même une fois "coffre" ajouté aux "Exposed schemas" du Dashboard).

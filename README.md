@@ -147,8 +147,9 @@ formellement.
 - **Santé** : trois vues — **Calendrier** (grille vaccin × âge avec pastille
   à jour/en retard, indicative, basée sur le calendrier vaccinal général —
   nécessite la date de naissance du membre, à saisir dans Paramétrage),
-  **Carnet de santé** (reproduction à l'écran + bouton "Exporter en PDF", qui
-  utilise l'impression du navigateur), et **Détail** (la liste brute,
+  **Carnet de santé** (reproduction à l'écran + bouton "Exporter en PDF" qui
+  génère un vrai fichier PDF via `@react-pdf/renderer`, avec juste une
+  pagination en bas de page, sans en-tête ni pied de page superflu), et **Détail** (la liste brute,
   éditable). Saisie manuelle ou import assisté d'un scan (voir section 6
   ci-dessus). Les vaccinations à venir ou en retard (≤ 3 mois) apparaissent
   aussi dans l'onglet Événements.
